@@ -42,7 +42,8 @@ void *g_real[GL_EXPORT_COUNT];          /* used by thunks.S */
 static HMODULE g_self, g_realgl;
 
 static struct {
-    int enabled, render_scale, log_level, stall_ms, filter_linear, stats_sec;
+    int enabled, log_level, stall_ms, filter_linear, stats_sec;
+    float render_scale;
     char block_hosts[512];
     int ao, fxaa;
     float ao_radius, ao_strength, ao_max_dist, sharpen;
@@ -50,7 +51,8 @@ static struct {
     float cpu_fov, depth_scale;
     int min_world_draws;
     int tex_dump, tex_replace;
-} cfg = { 1, 1, 1, 200, 1, 10, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50, 0, 1 };
+    int ask_on_launch, ultrawide_hud;
+} cfg = { 1, 1, 200, 1, 10, 1.0f, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50, 0, 1, 1, 0 };
 
 static int g_vactive, g_vw, g_vh;       /* virtual (game-requested) display mode */
 static int g_rw, g_rh;                  /* real primary monitor size */
@@ -60,7 +62,9 @@ static WNDPROC g_game_proc;             /* game's window proc (we subclass in fr
 
 static GLuint g_fbo;
 static int g_fbw, g_fbh, g_fbo_ready, g_fbo_dirty;
-static int g_scale = 1;                 /* active render scale (1 unless FBO ready) */
+static float g_scale = 1;               /* active render scale (1 unless FBO ready); may be fractional */
+/* scale a game-space rectangle edge-wise, so adjacent rectangles stay adjacent at any scale */
+#define SC(v) ((GLint)((v) * g_scale + 0.5f))
 
 static LARGE_INTEGER g_qpf, g_t0;
 static volatile LONG g_frames;
@@ -165,6 +169,8 @@ static BOOL (WINAPI *r_SwapBuffers)(HDC);
 static FARPROC (WINAPI *r_GetProcAddress)(HMODULE, LPCSTR);
 static HMODULE (WINAPI *r_LoadLibraryA)(LPCSTR);
 
+static void show_launcher(void);
+
 /* ------------------------------------------------------------------ coordinate mapping */
 static int mapping_on(void) { return cfg.enabled && g_vactive && g_hwnd && g_vw > 0 && g_vh > 0; }
 
@@ -233,6 +239,7 @@ static void subclass_window(void)
 /* ------------------------------------------------------------------ user32 hooks */
 static LONG WINAPI hk_ChangeDisplaySettingsA(DEVMODEA *dm, DWORD flags)
 {
+    show_launcher();
     g_last_hook = "ChangeDisplaySettingsA";
     if (!cfg.enabled) return r_ChangeDisplaySettingsA(dm, flags);
     if (!dm) {
@@ -292,6 +299,7 @@ static void build_mode_list(void)
 
 static BOOL WINAPI hk_EnumDisplaySettingsA(LPCSTR dev, DWORD mode, DEVMODEA *dm)
 {
+    show_launcher();
     if (!cfg.enabled) return r_EnumDisplaySettingsA(dev, mode, dm);
     if (mode == ENUM_CURRENT_SETTINGS || mode == ENUM_REGISTRY_SETTINGS) {
         BOOL r = r_EnumDisplaySettingsA(dev, mode, dm);
@@ -424,6 +432,7 @@ static FARPROC WINAPI hk_GetProcAddress(HMODULE m, LPCSTR name)
 
 static HMODULE WINAPI hk_LoadLibraryA(LPCSTR name)
 {
+    show_launcher();
     HMODULE r = r_LoadLibraryA(name);
     lg(1, "LoadLibraryA(%s) -> %p%s", name ? name : "(null)", (void *)r, r == g_self ? " (= sswrap)" : "");
     return r;
@@ -470,6 +479,7 @@ static void *WINAPI hk_gethostbyname(const char *name)
 
 #include "fbo_present.inc"
 #include "textures.inc"
+#include "launcher.inc"
 
 /* ------------------------------------------------------------------ exported GL hooks */
 BOOL WINAPI hk_wglSwapBuffers(HDC dc) { return present(dc); }
@@ -537,19 +547,20 @@ void WINAPI hk_glReadBuffer(GLenum m)
 
 void WINAPI hk_glViewport(GLint x, GLint y, GLsizei w, GLsizei h)
 {
-    LG_FIRST(10, 2, "glViewport(%d,%d %dx%d) scale %d", x, y, w, h, g_scale);
-    REAL(glViewport)(x * g_scale, y * g_scale, w * g_scale, h * g_scale);
+    LG_FIRST(10, 2, "glViewport(%d,%d %dx%d) scale %.2f", x, y, w, h, g_scale);
+    REAL(glViewport)(SC(x), SC(y), SC(x + w) - SC(x), SC(y + h) - SC(y));
 }
 
 void WINAPI hk_glScissor(GLint x, GLint y, GLsizei w, GLsizei h)
 {
-    REAL(glScissor)(x * g_scale, y * g_scale, w * g_scale, h * g_scale);
+    REAL(glScissor)(SC(x), SC(y), SC(x + w) - SC(x), SC(y + h) - SC(y));
 }
 
 void WINAPI hk_glGetIntegerv(GLenum p, GLint *v)
 {
     REAL(glGetIntegerv)(p, v);
-    if ((p == GL_VIEWPORT || p == GL_SCISSOR_BOX) && g_scale > 1) { v[0] /= g_scale; v[1] /= g_scale; v[2] /= g_scale; v[3] /= g_scale; }
+    if ((p == GL_VIEWPORT || p == GL_SCISSOR_BOX) && g_scale != 1.0f)
+        for (int i = 0; i < 4; i++) v[i] = (GLint)(v[i] / g_scale + 0.5f);
     if ((p == GL_DRAW_BUFFER || p == GL_READ_BUFFER) && g_fbo_ready && v[0] == GL_COLOR_ATTACHMENT0) v[0] = GL_BACK;
 }
 
@@ -559,35 +570,35 @@ void WINAPI hk_glPointSize(GLfloat s) { REAL(glPointSize)(s * g_scale); }
 /* pixel-exact operations: logged so we learn whether the game uses them, scaled where possible */
 void WINAPI hk_glReadPixels(GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum t, GLvoid *d)
 {
-    LG_FIRST(5, 1, "glReadPixels(%d,%d %dx%d)%s", x, y, w, h, g_scale > 1 ? " WARNING: unscaled at RenderScale>1" : "");
+    LG_FIRST(5, 1, "glReadPixels(%d,%d %dx%d)%s", x, y, w, h, g_scale != 1.0f ? " WARNING: unscaled at RenderScale>1" : "");
     REAL(glReadPixels)(x, y, w, h, f, t, d);
 }
 void WINAPI hk_glCopyPixels(GLint x, GLint y, GLsizei w, GLsizei h, GLenum t)
 {
-    LG_FIRST(5, 1, "glCopyPixels(%d,%d %dx%d)%s", x, y, w, h, g_scale > 1 ? " WARNING: unscaled at RenderScale>1" : "");
+    LG_FIRST(5, 1, "glCopyPixels(%d,%d %dx%d)%s", x, y, w, h, g_scale != 1.0f ? " WARNING: unscaled at RenderScale>1" : "");
     REAL(glCopyPixels)(x, y, w, h, t);
 }
 void WINAPI hk_glDrawPixels(GLsizei w, GLsizei h, GLenum f, GLenum t, const GLvoid *d)
 {
     LG_FIRST(5, 1, "glDrawPixels(%dx%d)", w, h);
-    if (g_scale > 1) {
+    if (g_scale != 1.0f) {
         GLfloat zx, zy; REAL(glGetFloatv)(GL_ZOOM_X, &zx); REAL(glGetFloatv)(GL_ZOOM_Y, &zy);
         REAL(glPixelZoom)(zx * g_scale, zy * g_scale); REAL(glDrawPixels)(w, h, f, t, d); REAL(glPixelZoom)(zx, zy);
     } else REAL(glDrawPixels)(w, h, f, t, d);
 }
 void WINAPI hk_glBitmap(GLsizei w, GLsizei h, GLfloat xo, GLfloat yo, GLfloat xm, GLfloat ym, const GLubyte *b)
 {
-    LG_FIRST(5, 1, "glBitmap(%dx%d)%s", w, h, g_scale > 1 ? " WARNING: drawn small at RenderScale>1" : "");
+    LG_FIRST(5, 1, "glBitmap(%dx%d)%s", w, h, g_scale != 1.0f ? " WARNING: drawn small at RenderScale>1" : "");
     REAL(glBitmap)(w, h, xo, yo, xm * g_scale, ym * g_scale, b);
 }
 void WINAPI hk_glCopyTexImage2D(GLenum tg, GLint lv, GLenum fmt, GLint x, GLint y, GLsizei w, GLsizei h, GLint bd)
 {
-    LG_FIRST(5, 1, "glCopyTexImage2D(%d,%d %dx%d)%s", x, y, w, h, g_scale > 1 ? " WARNING: unscaled at RenderScale>1" : "");
+    LG_FIRST(5, 1, "glCopyTexImage2D(%d,%d %dx%d)%s", x, y, w, h, g_scale != 1.0f ? " WARNING: unscaled at RenderScale>1" : "");
     REAL(glCopyTexImage2D)(tg, lv, fmt, x, y, w, h, bd);
 }
 void WINAPI hk_glCopyTexSubImage2D(GLenum tg, GLint lv, GLint xo, GLint yo, GLint x, GLint y, GLsizei w, GLsizei h)
 {
-    LG_FIRST(5, 1, "glCopyTexSubImage2D(%d,%d %dx%d)%s", x, y, w, h, g_scale > 1 ? " WARNING: unscaled at RenderScale>1" : "");
+    LG_FIRST(5, 1, "glCopyTexSubImage2D(%d,%d %dx%d)%s", x, y, w, h, g_scale != 1.0f ? " WARNING: unscaled at RenderScale>1" : "");
     REAL(glCopyTexSubImage2D)(tg, lv, xo, yo, x, y, w, h);
 }
 
@@ -751,6 +762,7 @@ static void hook_exe(void)
     H("USER32.dll", u, ShowCursor);             H("USER32.dll", u, WindowFromPoint);
     H("GDI32.dll", g, SwapBuffers);
     H("KERNEL32.dll", k, GetProcAddress);       H("KERNEL32.dll", k, LoadLibraryA);
+    H("KERNEL32.dll", k, CreateFileA);
     HMODULE ws = GetModuleHandleA("wsock32.dll");
     if (ws) {
         H("WSOCK32.dll", ws, gethostbyname);
@@ -776,7 +788,9 @@ static void read_config(void)
     GetModuleFileNameA(g_self, ini, sizeof ini);
     p = strrchr(ini, '\\'); strcpy(p ? p + 1 : ini, "sswrap.ini");
     cfg.enabled = GetPrivateProfileIntA("sswrap", "Enabled", cfg.enabled, ini);
-    cfg.render_scale = GetPrivateProfileIntA("sswrap", "RenderScale", cfg.render_scale, ini);
+    cfg.render_scale = ini_float(ini, "RenderScale", cfg.render_scale);
+    if (cfg.render_scale < 0.25f) cfg.render_scale = 1.0f;
+    if (cfg.render_scale > 8.0f) cfg.render_scale = 8.0f;
     cfg.log_level = GetPrivateProfileIntA("sswrap", "LogLevel", cfg.log_level, ini);
     cfg.stall_ms = GetPrivateProfileIntA("sswrap", "StallMs", cfg.stall_ms, ini);
     cfg.filter_linear = GetPrivateProfileIntA("sswrap", "LinearFilter", cfg.filter_linear, ini);
@@ -794,6 +808,8 @@ static void read_config(void)
     cfg.min_world_draws = GetPrivateProfileIntA("sswrap", "MinWorldDraws", cfg.min_world_draws, ini);
     cfg.tex_dump = GetPrivateProfileIntA("sswrap", "TextureDump", cfg.tex_dump, ini);
     cfg.tex_replace = GetPrivateProfileIntA("sswrap", "TextureReplace", cfg.tex_replace, ini);
+    cfg.ask_on_launch = GetPrivateProfileIntA("sswrap", "AskOnLaunch", cfg.ask_on_launch, ini);
+    cfg.ultrawide_hud = GetPrivateProfileIntA("sswrap", "UltrawideHud", cfg.ultrawide_hud, ini);
 }
 
 static void open_log(void)
@@ -814,7 +830,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID res)
     InitializeCriticalSection(&g_log_cs);
     read_config();
     open_log();
-    lg(0, "sswrap starting: Enabled=%d RenderScale=%d LogLevel=%d StallMs=%d LinearFilter=%d",
+    lg(0, "sswrap starting: Enabled=%d RenderScale=%.2f LogLevel=%d StallMs=%d LinearFilter=%d",
        cfg.enabled, cfg.render_scale, cfg.log_level, cfg.stall_ms, cfg.filter_linear);
     lg(0, "effects: AO=%d (radius %.2f strength %.2f maxdist %.0f) FXAA=%d Sharpen=%.2f",
        cfg.ao, cfg.ao_radius, cfg.ao_strength, cfg.ao_max_dist, cfg.fxaa, cfg.sharpen);

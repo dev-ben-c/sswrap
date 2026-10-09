@@ -1,0 +1,32 @@
+sswrap - OpenGL wrapper for Starsiege (1999)
+https://github.com/dev-ben-c/sswrap
+
+INSTALL
+1. Copy opengl32.dll and sswrap.ini into your Starsiege folder, the one that
+   contains Starsiege.exe (by default C:\Dynamix\Starsiege).
+2. Start Starsiege as usual. Before the game appears, a "display settings" window
+   opens. It shows your monitor's resolution; pick:
+     - HUD size: how big the HUD and text are (2x is a good start on 1440p and up,
+       1.5x on 1080p-1440p).
+     - Render quality: Native, or 2x/3x supersampling for a sharper, smoother image.
+     - Effects: ambient occlusion and edge smoothing.
+     - Ultrawide HUD: on 21:9 and wider screens, keeps the HUD in the middle.
+   Click "Start game". Untick "Show this window every time" to stop it appearing;
+   set AskOnLaunch=1 in sswrap.ini to get it back.
+3. In the game's own video options, keep the OpenGL renderer and fullscreen.
+
+UNINSTALL
+Delete opengl32.dll and sswrap.ini from the Starsiege folder (and the
+sswrap_textures folder if you made one). If you used Ultrawide HUD, rename
+hudLayout.prf.sswrap-orig back to hudLayout.prf to restore your old HUD layout.
+
+NOTES
+- Windows may warn about an unknown DLL. It is built from the public source code by
+  GitHub's build service; SHA256SUMS.txt lists its checksum.
+- The game still checks for its CD. A mounted disc image works, but Windows' built-in
+  ISO mounting has no CD music; see the README for ogg-winmm, which plays the music
+  from files instead.
+- Problems? sswrap.log (next to the game) records what happened. Please attach it to
+  an issue on GitHub.
+- Tested with the original retail release (version 1.004) under Wine on Linux.
+  Windows and the free Hi-Rez re-release are expected to work but are less tested.

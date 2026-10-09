@@ -29,24 +29,46 @@ SUPER, 3440x1440). It should also work on Windows, but that is untested.
 
 ## Install
 
-1. Build `opengl32.dll` (below) or download it from the releases page.
-2. Copy `opengl32.dll` and `sswrap.ini` into the Starsiege folder (next to `Starsiege.exe`).
-3. **Wine only:** make Wine use it for Starsiege:
+### Windows
+
+1. Download the latest `sswrap-*.zip` from the [Releases page](https://github.com/dev-ben-c/sswrap/releases)
+   (built from this source by GitHub Actions).
+2. Copy `opengl32.dll` and `sswrap.ini` into the Starsiege folder, next to `Starsiege.exe`.
+3. Start the game. A settings window appears first: pick a **HUD size**, **render quality**,
+   effects and (on 21:9 and wider screens) **Ultrawide HUD**, then click *Start game*.
+
+That's it. Details, uninstalling and notes are in `INSTALL-WINDOWS.txt` inside the zip.
+
+### Linux / Wine
+
+1. Same files as above into the Starsiege folder (or build them yourself, see *Building*).
+2. Make Wine use the DLL for Starsiege:
    ```sh
    wine reg add 'HKCU\Software\Wine\AppDefaults\Starsiege.exe\DllOverrides' /v opengl32 /d native,builtin /f
    ```
-4. In the game, pick the **OpenGL** renderer, fullscreen, and any resolution you like.
+3. Start the game; the same settings window appears.
 
-`contrib/linux/starsiege.sh` is an example launcher that also keeps the game on OpenGL/fullscreen
-(the game sometimes saves itself into windowed Software mode) and pins it to one CPU core, which
-removes stutter in this 1999 engine.
+`contrib/linux/starsiege.sh` is an example launcher that also pins the game to one CPU core,
+which removes stutter in this 1999 engine.
+
+### The settings window
+
+| Option | What it does |
+|---|---|
+| HUD size | The game lays its HUD out in pixels, so it runs at your monitor's size divided by this; 2x on a 3440x1440 screen means the game runs at 1720x720 with a 2x HUD |
+| Render quality | The 3D world renders at your monitor's resolution (Native) or 2x/3x above it and is scaled down, independent of HUD size |
+| Exact resolution | Advanced: pick a specific game resolution instead of a HUD size |
+| Ambient occlusion, edge smoothing | The visual effects; applied to the 3D world only, never the HUD |
+| Ultrawide HUD | Pulls HUD elements anchored to the screen edges in to a 16:9-wide area in the middle (rewrites `hudLayout.prf`, keeping the original as `hudLayout.prf.sswrap-orig`) |
 
 ## Settings (`sswrap.ini`)
 
 | Key | Default | Meaning |
 |---|---|---|
 | `Enabled` | 1 | 0 = pure pass-through (logging and watchdog still work), for comparisons |
-| `RenderScale` | 1 | Render at N x the requested size (experimental supersampling) |
+| `RenderScale` | 1 | Render at this multiple of the game's resolution, fractions allowed (set by the settings window) |
+| `AskOnLaunch` | 1 | Show the settings window at startup |
+| `UltrawideHud` | 0 | Keep the HUD within a centred 16:9 area (set by the settings window) |
 | `LinearFilter` | 1 | Smooth (1) or sharp pixel (0) scaling |
 | `AO`, `AORadius`, `AOStrength`, `AOMaxDistance` | 1, 3.0, 1.5, 400 | Ambient occlusion and its reach, darkness, fade distance |
 | `FXAA` | 1 | Edge smoothing |
@@ -96,7 +118,8 @@ Needs a 32-bit MinGW-w64 toolchain and Python 3. The easiest way is a throwaway 
 docker run --rm -v "$PWD":/src -w /src debian:stable-slim sh build-in-docker.sh
 ```
 
-or natively with `i686-w64-mingw32-gcc` (see the two commands in `build-in-docker.sh`).
+or natively with `sh build.sh` once `i686-w64-mingw32-gcc` is installed. Pushing a `v*` tag makes
+GitHub Actions build and publish a release zip.
 
 `gen.py` generates the pass-through layer from `exports.txt` (the export list of Wine's
 `opengl32.dll`): every export becomes a one-instruction jump to the real OpenGL, except the

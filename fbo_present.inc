@@ -85,6 +85,8 @@ static LONG g_ao_at_ortho, g_ao_at_present, g_ao_at_hud;
  * (reverse, GL_GEQUAL). g_world_draws counts draws made with depth testing on this frame. */
 static int g_depth_on; static LONG g_world_draws;
 static LONG g_draws;
+/* set once the HUD starts (depth test off after the world drew) until the swap */
+static int g_hud_phase;
 static int g_trace;                               /* frames left to trace (diagnostics) */
 static void trace_draws(const char *what);
 static void trace_depth_sample(void);
@@ -300,12 +302,14 @@ static void forget_gl_resources(const char *why)
 
 static void build_fbo(void)
 {
-    int w = g_vactive ? g_vw : 0, h = g_vactive ? g_vh : 0, sc = cfg.render_scale < 1 ? 1 : cfg.render_scale;
+    int w = g_vactive ? g_vw : 0, h = g_vactive ? g_vh : 0;
+    float sc = cfg.render_scale;
     g_fbo_dirty = 0;
     if (w <= 0 || h <= 0) { destroy_fbo(); lg(1, "fbo: no virtual mode yet, drawing straight to the window"); return; }
-    if (g_fbo && g_fbw == w * sc && g_fbh == h * sc) return;
+    int fw = (int)(w * sc + 0.5f), fh = (int)(h * sc + 0.5f);
+    if (g_fbo && g_fbw == fw && g_fbh == fh) return;
     destroy_fbo();
-    g_fbw = w * sc; g_fbh = h * sc;
+    g_fbw = fw; g_fbh = fh;
     REAL(glPushAttrib)(GL_TEXTURE_BIT);   /* creating textures changes the game's binding */
     g_color_tex = make_tex(GL_RGBA8_, GL_RGBA, GL_UNSIGNED_BYTE, g_fbw, g_fbh, cfg.filter_linear);
     g_depth_tex = make_tex(GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL_, GL_UNSIGNED_INT_24_8_, g_fbw, g_fbh, 0);
@@ -329,7 +333,7 @@ static void build_fbo(void)
     REAL(glDrawBuffer)(GL_COLOR_ATTACHMENT0);
     REAL(glReadBuffer)(GL_COLOR_ATTACHMENT0);
     g_fbo_ready = 1; g_scale = sc;
-    lg(1, "fbo: game renders %dx%d (virtual %dx%d x%d) -> scaled onto %dx%d monitor",
+    lg(1, "fbo: game renders %dx%d (virtual %dx%d x%.2f) -> scaled onto %dx%d monitor",
        g_fbw, g_fbh, w, h, sc, g_rw, g_rh);
 }
 
@@ -460,7 +464,7 @@ static BOOL present(HDC dc)
     } else {
         r = REAL(wglSwapBuffers)(dc);
     }
-    g_persp_seen = 0; g_ao_done = 0; g_world_draws = 0;
+    g_persp_seen = 0; g_ao_done = 0; g_world_draws = 0; g_hud_phase = 0;
     {
         static int last_w, countdown;
         if (g_vactive && g_vw != last_w) { last_w = g_vw; countdown = (g_vw != 640) ? 300 : 0; }
@@ -566,6 +570,7 @@ void WINAPI hk_glDisable(GLenum c)
 {
     if (c == GL_DEPTH_TEST) {
         g_depth_on = 0;
+        if (g_world_draws >= cfg.min_world_draws && g_fbo_ready) g_hud_phase = 1;
         if (!g_ao_done && g_world_draws >= cfg.min_world_draws && g_fbo_ready) apply_scene_fx("hud");
     }
     if (g_trace && (c == GL_DEPTH_TEST || c == GL_BLEND || c == GL_ALPHA_TEST || c == GL_FOG))
