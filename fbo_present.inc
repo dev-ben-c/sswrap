@@ -83,7 +83,7 @@ static LONG g_ao_at_ortho, g_ao_at_present, g_ao_at_hud;
 /* Games that project on the CPU (Starsiege/Darkstar) never set a GL perspective. There the world
  * is drawn with depth testing on, then the HUD with it off; depth is stored as ~1/distance
  * (reverse, GL_GEQUAL). g_world_draws counts draws made with depth testing on this frame. */
-static int g_depth_on; static LONG g_world_draws; static int g_cpu_proj;
+static int g_depth_on; static LONG g_world_draws;
 static LONG g_draws;
 static int g_trace;                               /* frames left to trace (diagnostics) */
 static void trace_draws(const char *what);
@@ -345,7 +345,12 @@ static void apply_scene_fx(const char *where)
 {
     int ao = cfg.ao, aa = cfg.fxaa || cfg.sharpen > 0;
     if ((!ao && !aa) || !g_fbo_ready || g_ao_done || !shaders_ready()) return;
-    if (!g_persp_seen && !g_cpu_proj) return;
+    /* Only run where we know we are between the 3D world and the HUD:
+     *  - "hud": a CPU-projected game just switched depth testing off after drawing its world;
+     *  - "ortho"/"present": a GL-perspective game set up a 3D projection this frame.
+     * Never as a whole-screen fallback otherwise: menus have no world, and their depth buffer
+     * holds nothing meaningful (that turned the Starsiege menu into a mess). */
+    if (where[0] == 'h' ? 0 : !g_persp_seen) return;
     g_ao_done = 1;
     float mode = g_persp_seen ? 0.0f : 1.0f;
     if (!g_persp_seen) {
@@ -561,7 +566,7 @@ void WINAPI hk_glDisable(GLenum c)
 {
     if (c == GL_DEPTH_TEST) {
         g_depth_on = 0;
-        if (!g_ao_done && g_world_draws >= cfg.min_world_draws && g_fbo_ready) { g_cpu_proj = 1; apply_scene_fx("hud"); }
+        if (!g_ao_done && g_world_draws >= cfg.min_world_draws && g_fbo_ready) apply_scene_fx("hud");
     }
     if (g_trace && (c == GL_DEPTH_TEST || c == GL_BLEND || c == GL_ALPHA_TEST || c == GL_FOG))
         trace_draws(c == GL_DEPTH_TEST ? "glDisable(DEPTH_TEST)" : c == GL_BLEND ? "glDisable(BLEND)" : c == GL_FOG ? "glDisable(FOG)" : "glDisable(ALPHA_TEST)");
