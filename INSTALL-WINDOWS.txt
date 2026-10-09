@@ -23,9 +23,16 @@ hudLayout.prf.sswrap-orig back to hudLayout.prf to restore your old HUD layout.
 NOTES
 - Windows may warn about an unknown DLL. It is built from the public source code by
   GitHub's build service; SHA256SUMS.txt lists its checksum.
-- The game still checks for its CD. A mounted disc image works, but Windows' built-in
-  ISO mounting has no CD music; see the README for ogg-winmm, which plays the music
-  from files instead.
+- The game still checks for its CD. A mounted disc image works, but has no CD music
+  (an ISO holds only the data track). To get the music back:
+    1. Rip the disc's music tracks to OGG (e.g. with fre:ac, freac.org). Track 1 is
+       game data; music starts at track 2.
+    2. Make a folder named Music next to Starsiege.exe and put the tracks in it as
+       Track02.ogg, Track03.ogg, ... (the disc's track numbers, no gaps).
+    3. Download ogg-winmm_binary.zip (github.com/ayuanx/ogg-winmm/releases), copy winmm.dll
+       and winmm.ini next to Starsiege.exe.
+    4. Turn CD music on in the game's sound options.
+  To undo, delete winmm.dll, winmm.ini and the Music folder.
 - Problems? sswrap.log (next to the game) records what happened. Please attach it to
   an issue on GitHub.
 - Tested with the original retail release (version 1.004) under Wine on Linux.

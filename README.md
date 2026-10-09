@@ -151,12 +151,46 @@ can build or extend a pack yourself, e.g. with an AI upscaler.
 
 Terrain, sky, vehicle skins, buildings and effects are covered; HUD and menu art is not.
 
-## CD music without the CD
+## CD music
 
-Starsiege plays its soundtrack as CD audio. To keep the music when running from a disc image or
-without the disc, rip the audio tracks to `Music/Track02.ogg` ... and use
-[ogg-winmm](https://github.com/ayuanx/ogg-winmm) (a separate project) as `winmm.dll`. Under Wine
-also set `winmm` to `native,builtin` for `Starsiege.exe`.
+Starsiege plays its soundtrack as **CD audio** tracks on the game disc. sswrap doesn't touch audio;
+here is how to keep the music.
+
+**With the original disc in the drive:** nothing to do. Make sure CD music is on in the game's sound
+options.
+
+**With a disc image, or no disc:** a mounted ISO (including Windows' built-in ISO mounting) holds
+only the data track, so the music is missing. [ogg-winmm](https://github.com/ayuanx/ogg-winmm) (a
+separate project) fixes that: it replaces the game's CD-audio calls and plays the tracks from OGG
+files instead.
+
+### Windows
+
+1. **Rip the music tracks** from your disc to OGG Vorbis. [fre:ac](https://www.freac.org/) (free,
+   open source) can rip straight to OGG; any ripper works if you convert to OGG afterwards.
+   Track 1 of the disc is the game data; the music starts at track 2.
+2. In the Starsiege folder (next to `Starsiege.exe`) create a folder named `Music` and put the
+   tracks in it, named by their **track number on the disc**: `Track02.ogg`, `Track03.ogg`, ...
+   (no spaces, no gaps in the numbering).
+3. Download `ogg-winmm_binary.zip` from its [releases page](https://github.com/ayuanx/ogg-winmm/releases) and
+   copy `winmm.dll` and `winmm.ini` into the Starsiege folder.
+4. Start the game with CD music turned on in its sound options. `winmm.ini` has a separate music
+   volume (`CDDAVolume`).
+
+The tracks differ between editions (the original 2-CD release, the 1-CD re-releases), so always
+rip from your own disc. To undo, delete `winmm.dll`, `winmm.ini` and the `Music` folder.
+
+### Linux / Wine
+
+The same steps, plus a Wine setting so the game uses ogg-winmm's `winmm.dll` instead of Wine's:
+
+```sh
+wine reg add 'HKCU\Software\Wine\AppDefaults\Starsiege.exe\DllOverrides' /v winmm /d native,builtin /f
+```
+
+Rip with `cdparanoia` and encode with `ffmpeg -i track02.wav -c:a libvorbis -q:a 8 Track02.ogg`
+(note the capital T in the final names). ogg-winmm also builds from source with MinGW if you'd
+rather not use a prebuilt DLL.
 
 ## Building
 
