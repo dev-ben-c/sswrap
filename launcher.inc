@@ -82,41 +82,43 @@ static void add_res(int w, int h, const char *fmt)
     g_nres_items++;
 }
 
-/* HUD size presets: the game lays its HUD out in pixels, so running it at native / k makes
- * the HUD k times bigger; RenderScale = k x quality keeps the 3D world at native or above. */
-static const float g_huds[] = { 1.0f, 1.25f, 1.5f, 2.0f, 3.0f };
+/* The window, two layouts:
+ *  - retail 1.004 (HUD hooks available): the game runs at the monitor's native resolution and
+ *    HUD scale enlarges the HUD meters; resolution is a separate, normally untouched choice.
+ *  - other builds: no HUD hooks, so a bigger HUD means running the game at native / k
+ *    ("HUD size"), with RenderScale keeping the 3D world sharp. */
+static const float g_huds[] = { 1.0f, 1.25f, 1.5f, 2.0f, 3.0f };      /* HUD size (other builds) */
 #define NHUDS 5
+static const float g_hscales[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };  /* HUD scale (1.004) */
+#define NHSCALES 5
 static const int g_quals[] = { 1, 2, 3 };
-#define NQUALS 3
+static int g_hud_ok;
+#define ID_UIUP 112
 
 static void hud_res(float k, int *w, int *h) { *w = ((int)(g_rw / k + 0.5f)) & ~1; *h = ((int)(g_rh / k + 0.5f)) & ~1; }
+static int sel(HWND d, int id) { int i = (int)SendDlgItemMessageA(d, id, CB_GETCURSEL, 0, 0); return i < 0 ? 0 : i; }
+static int checked(HWND d, int id) { return SendDlgItemMessageA(d, id, BM_GETCHECK, 0, 0) == BST_CHECKED; }
 
 /* the game resolution and RenderScale the current choices add up to */
-static void launcher_choice(HWND d, int *gw, int *gh, float *scale, float *hud)
+static void launcher_choice(HWND d, int *gw, int *gh, float *scale)
 {
-    int hi = (int)SendDlgItemMessageA(d, ID_HUD, CB_GETCURSEL, 0, 0);
-    int qi = (int)SendDlgItemMessageA(d, ID_SCALE, CB_GETCURSEL, 0, 0);
-    int ri = (int)SendDlgItemMessageA(d, ID_RES, CB_GETCURSEL, 0, 0);
-    float q = (float)g_quals[qi < 0 ? 0 : qi];
-    if (ri > 0) {                      /* advanced: exact resolution */
-        *gw = g_res_items[ri - 1].w; *gh = g_res_items[ri - 1].h;
-        float sx = (float)g_rw / *gw, sy = (float)g_rh / *gh;
-        *hud = sx < sy ? sx : sy;
-    } else {
-        *hud = g_huds[hi < 0 ? 0 : hi];
-        hud_res(*hud, gw, gh);
-    }
-    *scale = (*hud < 1.0f ? 1.0f : *hud) * q;
+    int ri = sel(d, ID_RES);
+    if (ri > 0) { *gw = g_res_items[ri - 1].w; *gh = g_res_items[ri - 1].h; }
+    else if (g_hud_ok) { *gw = g_rw; *gh = g_rh; }
+    else hud_res(g_huds[sel(d, ID_HUD)], gw, gh);
+    /* render at (at least) the monitor's resolution, times the chosen quality */
+    float sx = (float)g_rw / *gw, sy = (float)g_rh / *gh, k = sx < sy ? sx : sy;
+    *scale = (k < 1.0f ? 1.0f : k) * g_quals[sel(d, ID_SCALE)];
     if (*scale > 8.0f) *scale = 8.0f;
 }
 
 static void update_hint(void)
 {
-    int gw, gh; float sc, hud; char t[240];
-    launcher_choice(g_dlg, &gw, &gh, &sc, &hud);
-    EnableWindow(GetDlgItem(g_dlg, ID_HUD), SendDlgItemMessageA(g_dlg, ID_RES, CB_GETCURSEL, 0, 0) == 0);
-    snprintf(t, sizeof t, "The game runs at %d x %d (HUD %.2gx). The 3D world renders at %d x %d and is shown on your %d x %d monitor.",
-             gw, gh, hud, (int)(gw * sc + 0.5f), (int)(gh * sc + 0.5f), g_rw, g_rh);
+    int gw, gh; float sc; char t[240];
+    launcher_choice(g_dlg, &gw, &gh, &sc);
+    if (!g_hud_ok) EnableWindow(GetDlgItem(g_dlg, ID_HUD), sel(g_dlg, ID_RES) == 0);
+    snprintf(t, sizeof t, "The game runs at %d x %d; the 3D world is rendered at %d x %d and shown on your %d x %d monitor.",
+             gw, gh, (int)(gw * sc + 0.5f), (int)(gh * sc + 0.5f), g_rw, g_rh);
     SetDlgItemTextA(g_dlg, ID_HINT, t);
 }
 
@@ -124,7 +126,7 @@ static LRESULT CALLBACK launcher_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_COMMAND) {
         int id = LOWORD(w);
-        if ((id == ID_RES || id == ID_SCALE || id == ID_HUD) && HIWORD(w) == CBN_SELCHANGE) update_hint();
+        if ((id == ID_RES || id == ID_SCALE || id == ID_HUD || id == ID_HSCALE) && HIWORD(w) == CBN_SELCHANGE) update_hint();
         if (id == ID_START || id == ID_KEEP) {
             if (id == ID_START) launcher_capture_and_apply(h);   /* before the controls are destroyed */
             g_launcher_result = id; g_launcher_done = 1; DestroyWindow(h);
@@ -141,12 +143,24 @@ static HWND ctl(const char *cls, const char *text, DWORD style, int x, int y, in
     SendMessageA(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
     return c;
 }
+static HWND combo(const char *label, int y, int id)
+{
+    ctl("STATIC", label, 0, 16, y + 4, 130, 18, 0);
+    return ctl("COMBOBOX", "", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 150, y, 406, 300, id);
+}
+static HWND check(const char *label, int y, int id, int on)
+{
+    HWND c = ctl("BUTTON", label, BS_AUTOCHECKBOX | WS_TABSTOP, 150, y, 406, 20, id);
+    SendMessageA(c, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+    return c;
+}
 
 static void show_launcher(void)
 {
     static int shown;
     if (shown || !cfg.enabled || !cfg.ask_on_launch) return;
     shown = 1;
+    g_hud_ok = hud_supported();
 
     int cw, ch; read_game_res(&cw, &ch);
     for (int i = 0; i < g_nmodes; i++) add_res(g_modes[i].w, g_modes[i].h, "%d x %d");
@@ -156,70 +170,74 @@ static void show_launcher(void)
     wc.lpfnWndProc = launcher_proc; wc.hInstance = g_self; wc.lpszClassName = "sswrapLauncher";
     wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     RegisterClassA(&wc);
-    int W = 580, H = 412;
+    int W = 580, H = 400;
     g_dlg = CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, "sswrapLauncher", "Starsiege - display settings (sswrap)",
                             WS_POPUP | WS_CAPTION | WS_SYSMENU, (r_GetSystemMetrics(SM_CXSCREEN) - W) / 2,
                             (r_GetSystemMetrics(SM_CYSCREEN) - H) / 2, W, H, NULL, NULL, g_self, NULL);
     if (!g_dlg) { lg(0, "launcher: could not create the settings window"); return; }
 
-    char t[160];
+    char t[160]; int y = 14;
     snprintf(t, sizeof t, "Detected monitor: %d x %d", g_rw, g_rh);
-    ctl("STATIC", t, 0, 16, 14, 540, 18, 0);
+    ctl("STATIC", t, 0, 16, y, 540, 18, 0); y += 30;
 
-    /* HUD size, preselected from the game's current resolution */
-    ctl("STATIC", "HUD size:", 0, 16, 46, 130, 18, 0);
-    HWND hud = ctl("COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP, 150, 42, 406, 200, ID_HUD);
-    int hsel = 3; float best = 1e9f;
-    for (int i = 0; i < NHUDS; i++) {
-        int w, h; hud_res(g_huds[i], &w, &h);
-        snprintf(t, sizeof t, "%.2gx%s   (game runs at %d x %d)", g_huds[i],
-                 g_huds[i] == 1.0f ? " - smallest" : g_huds[i] == 2.0f ? " - recommended" : "", w, h);
-        SendMessageA(hud, CB_ADDSTRING, 0, (LPARAM)t);
-        if (cw > 0) { float d = (float)(w - cw) * (w - cw); if (d < best) { best = d; hsel = i; } }
+    /* resolution: native unless the player picks something else */
+    HWND res = combo("Resolution:", y, ID_RES); y += 34;
+    snprintf(t, sizeof t, g_hud_ok ? "Native  %d x %d  (recommended)" : "Automatic (from HUD size)", g_rw, g_rh);
+    SendMessageA(res, CB_ADDSTRING, 0, (LPARAM)t);
+    for (int i = 0; i < g_nres_items; i++) SendMessageA(res, CB_ADDSTRING, 0, (LPARAM)g_res_items[i].label);
+    int rsel = 0;
+    if (cw > 0 && !(cw == g_rw && ch == g_rh) && g_hud_ok)
+        for (int i = 0; i < g_nres_items; i++) if (g_res_items[i].w == cw && g_res_items[i].h == ch) rsel = i + 1;
+    SendMessageA(res, CB_SETCURSEL, rsel, 0);
+
+    if (g_hud_ok) {
+        HWND hs = combo("HUD scale:", y, ID_HSCALE); y += 34;
+        int hsel = 0;
+        for (int i = 0; i < NHSCALES; i++) {
+            snprintf(t, sizeof t, i == 0 ? "Off  (the game's own size)" : "%.3gx", g_hscales[i]);
+            SendMessageA(hs, CB_ADDSTRING, 0, (LPARAM)t);
+            if (cfg.hud_scale > g_hscales[i] - 0.01f) hsel = i;
+        }
+        SendMessageA(hs, CB_SETCURSEL, hsel, 0);
+    } else {
+        /* other builds: a bigger HUD comes from a smaller game resolution */
+        HWND hud = combo("HUD size:", y, ID_HUD); y += 34;
+        int hsel = 0; float best = 1e9f;
+        for (int i = 0; i < NHUDS; i++) {
+            int w, h; hud_res(g_huds[i], &w, &h);
+            snprintf(t, sizeof t, "%.3gx   (game runs at %d x %d)", g_huds[i], w, h);
+            SendMessageA(hud, CB_ADDSTRING, 0, (LPARAM)t);
+            if (cw > 0) { float dd = (float)(w - cw) * (w - cw); if (dd < best) { best = dd; hsel = i; } }
+        }
+        SendMessageA(hud, CB_SETCURSEL, hsel, 0);
     }
-    SendMessageA(hud, CB_SETCURSEL, hsel, 0);
 
-    /* render quality, preselected from the current RenderScale */
-    ctl("STATIC", "Render quality:", 0, 16, 82, 130, 18, 0);
-    HWND sc = ctl("COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP, 150, 78, 406, 200, ID_SCALE);
+    HWND sc = combo("Render quality:", y, ID_SCALE); y += 30;
     SendMessageA(sc, CB_ADDSTRING, 0, (LPARAM)"Native  (fastest)");
     SendMessageA(sc, CB_ADDSTRING, 0, (LPARAM)"2x supersampling");
     SendMessageA(sc, CB_ADDSTRING, 0, (LPARAM)"3x supersampling  (sharpest, smoothest)");
-    float q = cfg.render_scale / g_huds[hsel];
-    SendMessageA(sc, CB_SETCURSEL, q < 1.5f ? 0 : q < 2.5f ? 1 : 2, 0);
-
-    /* advanced: an exact resolution instead of a HUD size */
-    ctl("STATIC", "Exact resolution:", 0, 16, 118, 130, 18, 0);
-    HWND res = ctl("COMBOBOX", "", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 150, 114, 406, 300, ID_RES);
-    SendMessageA(res, CB_ADDSTRING, 0, (LPARAM)"Automatic (from HUD size)");
-    for (int i = 0; i < g_nres_items; i++) SendMessageA(res, CB_ADDSTRING, 0, (LPARAM)g_res_items[i].label);
-    SendMessageA(res, CB_SETCURSEL, 0, 0);
-
-    ctl("STATIC", "", 0, 150, 144, 406, 34, ID_HINT);
-    ctl("STATIC", "HUD meter scale:", 0, 16, 186, 130, 18, 0);
-    HWND hs = ctl("COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP, 150, 182, 406, 200, ID_HSCALE);
-    static const float hscales[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };
-    int hsel2 = 0;
-    for (int i = 0; i < 5; i++) {
-        snprintf(t, sizeof t, i == 0 ? "Off (game's size)" : "%.2gx  - radar, weapons, shields, reticle... grow from their corner", hscales[i]);
-        SendMessageA(hs, CB_ADDSTRING, 0, (LPARAM)t);
-        if (cfg.hud_scale > hscales[i] - 0.01f) hsel2 = i;
+    {
+        int gw = cw > 0 ? cw : g_rw, gh = ch > 0 ? ch : g_rh;
+        float sx = (float)g_rw / gw, sy = (float)g_rh / gh, k = sx < sy ? sx : sy; if (k < 1) k = 1;
+        float q = cfg.render_scale / k;
+        SendMessageA(sc, CB_SETCURSEL, q < 1.5f ? 0 : q < 2.5f ? 1 : 2, 0);
     }
-    SendMessageA(hs, CB_SETCURSEL, hsel2, 0);
-    HWND ao = ctl("BUTTON", "Ambient occlusion (soft contact shadows)", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 220, 406, 20, ID_AO);
-    HWND aa = ctl("BUTTON", "Edge smoothing and sharpening (FXAA)", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 244, 406, 20, ID_AA);
-    HWND uw = ctl("BUTTON", "Ultrawide HUD: keep the HUD within a 16:9 area in the centre", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 268, 406, 20, ID_UWHUD);
-    HWND ask = ctl("BUTTON", "Show this window every time the game starts", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 300, 406, 20, ID_ASK);
-    SendMessageA(ao, BM_SETCHECK, cfg.ao ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageA(aa, BM_SETCHECK, (cfg.fxaa || cfg.sharpen > 0) ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageA(ask, BM_SETCHECK, BST_CHECKED, 0);
-    SendMessageA(uw, BM_SETCHECK, cfg.ultrawide_hud ? BST_CHECKED : BST_UNCHECKED, 0);
-    ctl("BUTTON", "Start game", BS_DEFPUSHBUTTON | WS_TABSTOP, 320, 336, 116, 30, ID_START);
-    ctl("BUTTON", "Keep current", WS_TABSTOP, 440, 336, 116, 30, ID_KEEP);
+    ctl("STATIC", "", 0, 150, y, 406, 32, ID_HINT); y += 38;
+
+    check("Sharper HUD and menu art (pixel-art upscaling)", y, ID_UIUP, cfg.ui_upscale > 1); y += 24;
+    check("Ambient occlusion (soft contact shadows)", y, ID_AO, cfg.ao); y += 24;
+    check("Edge smoothing and sharpening (FXAA)", y, ID_AA, cfg.fxaa || cfg.sharpen > 0); y += 24;
+    HWND uw = check("Ultrawide HUD: keep the HUD within a 16:9 area in the centre", y, ID_UWHUD, cfg.ultrawide_hud); y += 24;
+    EnableWindow(uw, (float)g_rw / g_rh > 1.85f);
+    check("Show this window every time the game starts", y, ID_ASK, 1); y += 32;
+    ctl("BUTTON", "Start game", BS_DEFPUSHBUTTON | WS_TABSTOP, 320, y, 116, 30, ID_START);
+    ctl("BUTTON", "Keep current", WS_TABSTOP, 440, y, 116, 30, ID_KEEP);
+    SetWindowPos(g_dlg, NULL, 0, 0, W, y + 72, SWP_NOMOVE | SWP_NOZORDER);
     update_hint();
 
-    ShowWindow(g_dlg, SW_SHOW); SetForegroundWindow(g_dlg); SetFocus(hud);
-    lg(1, "launcher: settings window shown (monitor %dx%d, game currently %dx%d, RenderScale %.2f)", g_rw, g_rh, cw, ch, cfg.render_scale);
+    ShowWindow(g_dlg, SW_SHOW); SetForegroundWindow(g_dlg); SetFocus(res);
+    lg(1, "launcher: settings window shown (monitor %dx%d, game currently %dx%d, RenderScale %.2f, HUD hooks %s)",
+       g_rw, g_rh, cw, ch, cfg.render_scale, g_hud_ok ? "available" : "not available for this build");
     MSG msg; HWND dlg = g_dlg;
     while (!g_launcher_done && GetMessageA(&msg, NULL, 0, 0) > 0) {
         if (!IsDialogMessageA(dlg, &msg)) { TranslateMessage(&msg); DispatchMessageA(&msg); }
@@ -231,31 +249,27 @@ static void show_launcher(void)
 /* Save the choices (called on "Start game", while the controls still exist). */
 static void launcher_capture_and_apply(HWND h)
 {
-    int gw, gh; float sc, hud; char v[16];
-    launcher_choice(h, &gw, &gh, &sc, &hud);
-    int ao = SendDlgItemMessageA(h, ID_AO, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    int aa = SendDlgItemMessageA(h, ID_AA, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    int ask = SendDlgItemMessageA(h, ID_ASK, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    int uw = SendDlgItemMessageA(h, ID_UWHUD, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    static const float hscales[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };
-    int hsi = (int)SendDlgItemMessageA(h, ID_HSCALE, CB_GETCURSEL, 0, 0);
-    float hsv = hscales[hsi < 0 ? 0 : hsi];
+    int gw, gh; float sc; char v[16];
+    launcher_choice(h, &gw, &gh, &sc);
+    float hs = g_hud_ok ? g_hscales[sel(h, ID_HSCALE)] : 1.0f;
+    int ui = checked(h, ID_UIUP), ao = checked(h, ID_AO), aa = checked(h, ID_AA);
+    int uw = checked(h, ID_UWHUD) && IsWindowEnabled(GetDlgItem(h, ID_UWHUD)), ask = checked(h, ID_ASK);
     write_game_res(gw, gh);
-    cfg.ultrawide_hud = uw; ini_set("UltrawideHud", uw ? "1" : "0");
-    cfg.hud_scale = hsv; snprintf(v, sizeof v, "%.4g", hsv); ini_set("HudScale", v);
-    apply_hud_layout(uw, gw, gh);
     add_mode(gw, gh);                                   /* so the game's own menu can show it too */
     cfg.render_scale = sc; snprintf(v, sizeof v, "%.4g", sc); ini_set("RenderScale", v);
+    cfg.hud_scale = hs; snprintf(v, sizeof v, "%.4g", hs); ini_set("HudScale", v);
+    cfg.ui_upscale = ui ? 4 : 1; ini_set("UiUpscale", ui ? "4" : "1");
     cfg.ao = ao; ini_set("AO", ao ? "1" : "0");
     cfg.fxaa = aa; ini_set("FXAA", aa ? "1" : "0");
     if (aa && cfg.sharpen <= 0) cfg.sharpen = 0.4f;
     if (!aa) cfg.sharpen = 0;
     snprintf(v, sizeof v, "%.2f", cfg.sharpen); ini_set("Sharpen", v);
+    cfg.ultrawide_hud = uw; ini_set("UltrawideHud", uw ? "1" : "0");
+    apply_hud_layout(uw, gw, gh);
     cfg.ask_on_launch = ask; ini_set("AskOnLaunch", ask ? "1" : "0");
-    lg(1, "launcher: game %dx%d (HUD %.2fx), RenderScale %.2f, AO %d, FXAA/sharpen %d, ask next time %d",
-       gw, gh, hud, sc, ao, aa, ask);
+    lg(1, "launcher: game %dx%d, RenderScale %.2f, HudScale %.2f, UiUpscale %d, AO %d, FXAA %d, ultrawide HUD %d, ask next time %d",
+       gw, gh, sc, hs, cfg.ui_upscale, ao, aa, uw, ask);
 }
-
 
 /* ---- ultrawide HUD layout
  * hudLayout.prf (version 2): u32 version, u32 count, then 29-byte records. At record offset 29

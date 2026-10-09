@@ -6,10 +6,10 @@ INSTALL
    contains Starsiege.exe (by default C:\Dynamix\Starsiege).
 2. Start Starsiege as usual. Before the game appears, a "display settings" window
    opens. It shows your monitor's resolution; pick:
-     - HUD size: how big the HUD and text are (2x is a good start on 1440p and up,
-       1.5x on 1080p-1440p).
+     - Resolution: leave it on Native.
+     - HUD scale: how big the HUD meters are (1.5x is a good start on 1440p and up).
      - Render quality: Native, or 2x/3x supersampling for a sharper, smoother image.
-     - Effects: ambient occlusion and edge smoothing.
+     - Sharper HUD and menu art, ambient occlusion, edge smoothing: leave them on.
      - Ultrawide HUD: on 21:9 and wider screens, keeps the HUD in the middle.
    Click "Start game". Untick "Show this window every time" to stop it appearing;
    set AskOnLaunch=1 in sswrap.ini to get it back.

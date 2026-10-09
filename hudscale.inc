@@ -123,18 +123,25 @@ __asm__(
     "  ret   $8\n"
 );
 
-static void hud_install(void)
+/* 1 if this is the game build the HUD hooks were made for (every slot holds its 1.004 address) */
+static int hud_supported(void)
 {
-    if (cfg.hud_scale == 1.0f) { lg(1, "hud scale: off (HudScale=1)"); return; }
-    if (!cfg.enabled) return;
     for (int i = 0; i < N_HUD_CLASSES; i++) {
         MEMORY_BASIC_INFORMATION mbi;
         if (!VirtualQuery((void *)g_hud_classes[i].slot, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT ||
-            *(DWORD *)g_hud_classes[i].slot != g_hud_classes[i].orig) {
-            lg(0, "hud scale: %s is not where version 1.004 has it; this game build is not supported, HUD scale disabled",
-               g_hud_classes[i].name);
-            return;
-        }
+            *(DWORD *)g_hud_classes[i].slot != g_hud_classes[i].orig)
+            return 0;
+    }
+    return 1;
+}
+
+static void hud_install(void)
+{
+    if (g_hud_installed || !cfg.enabled) return;
+    if (cfg.hud_scale == 1.0f) { lg(1, "hud scale: off (HudScale=1)"); return; }
+    if (!hud_supported()) {
+        lg(0, "hud scale: this game build is not version 1.004; HUD scale disabled");
+        return;
     }
     for (int i = 0; i < N_HUD_CLASSES; i++) {
         DWORD old;

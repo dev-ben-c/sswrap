@@ -41,7 +41,7 @@ SUPER, 3440x1440). It should also work on Windows, but that is untested.
 1. Download the latest `sswrap-*.zip` from the [Releases page](https://github.com/dev-ben-c/sswrap/releases)
    (built from this source by GitHub Actions).
 2. Copy `opengl32.dll` and `sswrap.ini` into the Starsiege folder, next to `Starsiege.exe`.
-3. Start the game. A settings window appears first: pick a **HUD size**, **render quality**,
+3. Start the game. A settings window appears first: pick a **HUD scale**, **render quality**,
    effects and (on 21:9 and wider screens) **Ultrawide HUD**, then click *Start game*.
 
 That's it. Details, uninstalling and notes are in `INSTALL-WINDOWS.txt` inside the zip.
@@ -62,36 +62,32 @@ which removes stutter in this 1999 engine.
 
 | Option | What it does |
 |---|---|
-| HUD size | The game lays its HUD out in pixels, so it runs at your monitor's size divided by this; 2x on a 3440x1440 screen means the game runs at 1720x720 with a 2x HUD |
-| Render quality | The 3D world renders at your monitor's resolution (Native) or 2x/3x above it and is scaled down, independent of HUD size |
-| Exact resolution | Advanced: pick a specific game resolution instead of a HUD size |
+| Resolution | **Native** (your monitor's resolution) is what you want; a specific resolution can be picked if needed |
+| HUD scale | Enlarges the HUD meters (radar, shields, weapons, reticle, target, timer, chat) 1.25x-2x |
+| Render quality | The 3D world renders at your monitor's resolution (Native) or 2x/3x above it and is averaged down (supersampling) |
+| Sharper HUD and menu art | Runs the HUD, menu and font bitmaps through a 4x pixel-art filter (or HD replacements) before they are enlarged (`UiUpscale=4`) |
 | Ambient occlusion, edge smoothing | The visual effects; applied to the 3D world only, never the HUD |
 | Ultrawide HUD | Pulls HUD elements anchored to the screen edges in to a 16:9-wide area in the middle (rewrites `hudLayout.prf`, keeping the original as `hudLayout.prf.sswrap-orig`) |
 
-### The HUD: what you can and can't change
+The window shows the resulting game and render resolutions for whatever you pick. Supersampling
+is demanding: 3x on a 3440x1440 screen is about 45 million pixels per frame (around 90-150 fps on
+an RTX 4080 SUPER, versus a locked 165 at 2x).
 
-**Why HUD size is tied to the game's resolution.** Starsiege draws its HUD from fixed-size pixel art
-and bitmap fonts, and it places every HUD element in absolute screen pixels (sswrap traced a full
-HUD frame: no per-element positioning, no scaling, just finished screen coordinates). There is no
-font-size or HUD-scale setting in the game, and a wrapper cannot tell where one HUD element ends and
-the next begins, so it cannot scale them individually. What it *can* do is run the game at a smaller
-resolution, which makes the game lay the whole HUD out bigger, while rendering the 3D world at full
-sharpness separately. That is what **HUD size** does.
+### The HUD
 
-**HUD size and render quality are independent.** HUD size picks the game's resolution (your monitor
-divided by the HUD size); render quality picks how sharply the 3D world is drawn. A bigger HUD never
-costs sharpness:
+**HUD scale (retail 1.004).** Starsiege lays its HUD out in absolute screen pixels from fixed-size
+pixel art, with no size setting of its own. sswrap found the HUD's GUI classes in the game with
+Ghidra and wraps each one's render call, scaling it around a shared screen anchor (the corner, edge
+centre or screen centre of its region) so neighbouring elements stay aligned while the game runs
+at your native resolution. Buttons and dialogs are left alone so clicks still land where they are
+drawn. Many HUD panels are painted by the game in software at their original resolution, text
+included, so leave **Sharper HUD and menu art** on: the pixel-art filter smooths them before they
+are enlarged.
 
-| Monitor | HUD size | Game runs at | Render quality | 3D world drawn at |
-|---|---|---|---|---|
-| 1920x1080 | 1.5x | 1280x720 | Native | 1920x1080 |
-| 2560x1440 | 2x | 1280x720 | 2x | 5120x2880 |
-| 3440x1440 | 1.5x | 2292x960 | Native | 3440x1440 |
-| 3440x1440 | 2x | 1720x720 | 3x | 10320x4320 |
-
-The settings window shows the resulting numbers for whatever you pick. Supersampling is
-demanding: 3x on a 3440x1440 screen is about 45 million pixels per frame (around 90 fps on an
-RTX 4080 SUPER, versus a locked 165 at 2x).
+**Other game versions.** HUD scale only activates if the game's code is exactly version 1.004. On
+any other build the window instead offers **HUD size**, the older method: the game runs at your
+monitor's resolution divided by the HUD size (so it lays the whole HUD out bigger) while the 3D
+world is still rendered at full sharpness.
 
 **Moving HUD elements.** HUD positions are stored in `hudLayout.prf` as fractions of the screen, so
 they *can* be moved. **Ultrawide HUD** uses this: on screens wider than 16:9 it pulls the elements
@@ -100,24 +96,9 @@ look to the far corners. Heights and centred elements (reticle, compass) are unc
 original layout is kept as `hudLayout.prf.sswrap-orig`; unticking the option restores it, and if
 you rearrange the HUD in the game, that arrangement becomes the new original.
 
-**HUD meter scale (retail 1.004).** Separately from HUD size, the settings window's *HUD meter
-scale* enlarges the HUD meters themselves (radar, shields, weapons, reticle, target, timer, text)
-by up to 2x while the game runs at your native resolution. sswrap found the HUD's GUI classes in the
-game with Ghidra and wraps each one's render call, scaling it around a shared screen anchor (the
-corner, edge centre or screen centre of its region), so neighbouring elements stay aligned.
-Buttons and dialogs are left alone so clicks still land where they are drawn. It only activates if
-the game's code is exactly version 1.004. Pair it with `UiUpscale=4`: many HUD panels are painted
-by the game in software at their original resolution, text included, and the pixel-art filter
-smooths them before they are enlarged.
-
 **Known limits.**
-- HUD sizes are steps of the game resolution, so text and lines are drawn at the game's pixel size
-  and scaled up: they stay clean (they are drawn at the render quality's resolution) but are not
-  redrawn with more detail.
-- The game may pick slightly simpler models and terrain a little sooner at lower game resolutions
-  (level of detail is chosen from the game's resolution, not the render resolution). If distant
-  objects look blocky at large HUD sizes, raise the shape and terrain detail sliders in the game's
-  video options.
+- HUD text and panels are enlarged from the game's own pixel art, smoothed but not redrawn with
+  more detail.
 - Menus are fixed 640x480 artwork; they are scaled to the screen height with bars at the sides.
 
 ## Settings (`sswrap.ini`)
