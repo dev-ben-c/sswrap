@@ -262,6 +262,21 @@ static void destroy_fbo(void)
     g_fbo_ready = 0; g_scale = 1;
 }
 
+/* The game destroys its GL context whenever it loses focus and makes a new one when it comes
+ * back. Our objects die with the old context, and their IDs mean nothing (or worse, the game's
+ * own textures) in the new one, so never delete them by ID across contexts: just forget them. */
+static HGLRC g_res_ctx;
+static void forget_gl_resources(const char *why)
+{
+    if (g_fbo || g_prog_present || g_shaders_ok > 0) lg(1, "gl: forgetting our objects (%s)", why);
+    g_fbo = g_colonly_fbo = g_ao_fbo = g_color_tex = g_depth_tex = g_ao_tex = 0;
+    g_fbo_ready = 0; g_scale = 1;
+    g_prog_ao = g_prog_aoapply = g_prog_present = 0;
+    g_shaders_ok = -1;
+    pBindFramebuffer = NULL;            /* re-fetch entry points for the new context */
+    g_persp_seen = g_ao_done = 0;
+}
+
 static void build_fbo(void)
 {
     int w = g_vactive ? g_vw : 0, h = g_vactive ? g_vh : 0, sc = cfg.render_scale < 1 ? 1 : cfg.render_scale;

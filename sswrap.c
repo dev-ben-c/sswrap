@@ -487,10 +487,11 @@ BOOL WINAPI hk_wglMakeCurrent(HDC dc, HGLRC rc)
     }
     g_hdc = dc;
     g_hwnd = WindowFromDC(dc);
+    if (rc != g_res_ctx) { forget_gl_resources("new GL context"); g_res_ctx = rc; }
     if (cfg.enabled) {
         subclass_window();
         force_window_geometry("context made current");
-        if (pBindFramebuffer || load_gl3()) { destroy_fbo(); build_fbo(); }
+        if (pBindFramebuffer || load_gl3()) build_fbo();
     }
     return r;
 }
@@ -505,7 +506,7 @@ HGLRC WINAPI hk_wglCreateContext(HDC dc)
 BOOL WINAPI hk_wglDeleteContext(HGLRC rc)
 {
     lg(1, "wglDeleteContext(%p)", (void *)rc);
-    if (g_fbo && pBindFramebuffer) destroy_fbo();
+    if (rc == g_res_ctx) { forget_gl_resources("context deleted"); g_res_ctx = NULL; }
     return REAL(wglDeleteContext)(rc);
 }
 
