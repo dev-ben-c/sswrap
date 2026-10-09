@@ -17,6 +17,7 @@ HOOKED = {
     "glCopyTexImage2D": 32, "glCopyTexSubImage2D": 32,
     # post-processing: detect the 3D -> 2D HUD switch and capture the 3D projection
     "glMatrixMode": 4, "glLoadIdentity": 0, "glOrtho": 48,
+    "glFrustum": 48, "glLoadMatrixf": 4, "glLoadMatrixd": 4, "glMultMatrixf": 4, "glMultMatrixd": 4,
 }
 missing = set(HOOKED) - set(names)
 assert not missing, missing

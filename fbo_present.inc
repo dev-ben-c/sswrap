@@ -38,6 +38,11 @@ typedef void (WINAPI *PFN_glPopClientAttrib)(void);
 typedef void (WINAPI *PFN_glMatrixMode)(GLenum);
 typedef void (WINAPI *PFN_glLoadIdentity)(void);
 typedef void (WINAPI *PFN_glOrtho)(GLdouble, GLdouble, GLdouble, GLdouble, GLdouble, GLdouble);
+typedef void (WINAPI *PFN_glFrustum)(GLdouble, GLdouble, GLdouble, GLdouble, GLdouble, GLdouble);
+typedef void (WINAPI *PFN_glLoadMatrixf)(const GLfloat *);
+typedef void (WINAPI *PFN_glLoadMatrixd)(const GLdouble *);
+typedef void (WINAPI *PFN_glMultMatrixf)(const GLfloat *);
+typedef void (WINAPI *PFN_glMultMatrixd)(const GLdouble *);
 typedef void (WINAPI *PFN_glFramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
 
 static void (WINAPI *pFramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
@@ -71,6 +76,8 @@ static GLenum g_matrix_mode = GL_MODELVIEW;
 static int g_persp_seen, g_ao_done;
 static float g_proj[4];                           /* P[0], P[5], near, far */
 static LONG g_ao_at_ortho, g_ao_at_present;
+static int g_trace;                               /* frames left to trace (diagnostics) */
+static LONG g_trace_lines;
 
 static int load_gl3(void)
 {
@@ -425,6 +432,12 @@ static BOOL present(HDC dc)
         r = REAL(wglSwapBuffers)(dc);
     }
     g_persp_seen = 0; g_ao_done = 0;
+    {
+        static int last_w, countdown;
+        if (g_vactive && g_vw != last_w) { last_w = g_vw; countdown = (g_vw != 640) ? 300 : 0; }
+        if (g_trace) { if (--g_trace == 0) lg(0, "trace: end"); else lg(0, "trace: ---- frame boundary ----"); }
+        if (countdown > 0 && --countdown == 0 && cfg.log_level >= 1) { g_trace = 2; g_trace_lines = 0; lg(0, "trace: projection calls for 2 frames (%dx%d)", g_vw, g_vh); }
+    }
     QueryPerformanceCounter(&b);
     g_in_swap = 0;
 
@@ -454,27 +467,53 @@ static BOOL present(HDC dc)
     return r;
 }
 
-/* ---- matrix hooks: capture the 3D projection, run AO when the HUD (ortho) starts */
-void WINAPI hk_glMatrixMode(GLenum m) { g_matrix_mode = m; REAL(glMatrixMode)(m); }
+/* ---- matrix hooks: capture the 3D projection, run the scene effects when the HUD starts.
+ * Games set up projections in different ways (glFrustum, glLoadMatrix, glMultMatrix,
+ * glOrtho), so after each projection change we read back the resulting matrix and classify
+ * it: perspective (m[11] == -1, m[15] == 0) or orthographic (m[11] == 0, m[15] == 1).
+ * The first switch from perspective to orthographic in a frame is the 3D -> HUD boundary. */
+#define TRACE(...) do { if (g_trace && g_trace_lines < 400) { g_trace_lines++; lg(0, "trace: " __VA_ARGS__); } } while (0)
+
+static void classify_projection(const char *who)
+{
+    GLfloat m[16];
+    if (g_matrix_mode != GL_PROJECTION || !g_fbo_ready || !(cfg.ao || cfg.fxaa || cfg.sharpen > 0)) return;
+    REAL(glGetFloatv)(GL_PROJECTION_MATRIX, m);
+    int persp = m[11] < -0.999f && m[11] > -1.001f && m[15] == 0.0f && m[10] != 1.0f && m[10] != -1.0f;
+    int ortho = m[11] == 0.0f && m[15] == 1.0f;
+    TRACE("%s -> projection %s (m0 %.3f m5 %.3f m10 %.4f m14 %.3f)", who, persp ? "PERSPECTIVE" : ortho ? "ortho" : "other", m[0], m[5], m[10], m[14]);
+    if (persp) {
+        g_proj[0] = m[0]; g_proj[1] = m[5];
+        g_proj[2] = m[14] / (m[10] - 1.0f);           /* near */
+        g_proj[3] = m[14] / (m[10] + 1.0f);           /* far */
+        g_persp_seen = 1;
+    } else if (ortho && g_persp_seen && !g_ao_done) {
+        apply_scene_fx("ortho");
+    }
+}
+
+void WINAPI hk_glMatrixMode(GLenum m) { g_matrix_mode = m; TRACE("glMatrixMode(%s)", m == GL_PROJECTION ? "PROJECTION" : m == GL_MODELVIEW ? "MODELVIEW" : "other"); REAL(glMatrixMode)(m); }
 
 void WINAPI hk_glLoadIdentity(void)
 {
-    if (g_matrix_mode == GL_PROJECTION && (cfg.ao || cfg.fxaa || cfg.sharpen > 0) && g_fbo_ready) {
-        GLfloat m[16];
-        REAL(glGetFloatv)(GL_PROJECTION_MATRIX, m);
-        /* a perspective projection has m[11] == -1 and m[15] == 0 */
-        if (m[11] < -0.999f && m[11] > -1.001f && m[15] == 0.0f && m[10] != 1.0f && m[10] != -1.0f) {
-            g_proj[0] = m[0]; g_proj[1] = m[5];
-            g_proj[2] = m[14] / (m[10] - 1.0f);           /* near */
-            g_proj[3] = m[14] / (m[10] + 1.0f);           /* far */
-            g_persp_seen = 1;
-        }
-    }
+    /* the old projection may be the 3D one about to be replaced: capture it first */
+    if (g_matrix_mode == GL_PROJECTION) classify_projection("before glLoadIdentity");
     REAL(glLoadIdentity)();
 }
 
 void WINAPI hk_glOrtho(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f)
 {
-    if (g_persp_seen && !g_ao_done) apply_scene_fx("ortho");
+    TRACE("glOrtho(%.0f %.0f %.0f %.0f)", l, r, b, t);
+    if (g_matrix_mode == GL_PROJECTION && g_persp_seen && !g_ao_done) apply_scene_fx("ortho");
     REAL(glOrtho)(l, r, b, t, n, f);
 }
+
+void WINAPI hk_glFrustum(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f)
+{
+    REAL(glFrustum)(l, r, b, t, n, f);
+    classify_projection("glFrustum");
+}
+void WINAPI hk_glLoadMatrixf(const GLfloat *m) { REAL(glLoadMatrixf)(m); classify_projection("glLoadMatrixf"); }
+void WINAPI hk_glLoadMatrixd(const GLdouble *m) { REAL(glLoadMatrixd)(m); classify_projection("glLoadMatrixd"); }
+void WINAPI hk_glMultMatrixf(const GLfloat *m) { REAL(glMultMatrixf)(m); classify_projection("glMultMatrixf"); }
+void WINAPI hk_glMultMatrixd(const GLdouble *m) { REAL(glMultMatrixd)(m); classify_projection("glMultMatrixd"); }
