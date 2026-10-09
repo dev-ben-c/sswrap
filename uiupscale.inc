@@ -18,7 +18,7 @@ typedef void (WINAPI *PFN_glGetTexLevelParameteriv)(GLenum, GLint, GLenum, GLint
 typedef void (WINAPI *PFN_glPixelStorei)(GLenum, GLint);
 typedef void (WINAPI *PFN_glGetTexParameteriv)(GLenum, GLenum, GLint *);
 
-struct ui_page { GLuint id; int w, h; };          /* original size; stored k times larger */
+struct ui_page { GLuint id; int w, h; int updates, animated; DWORD t0; };   /* original size; stored k times larger */
 /* Only UI pages are touched. The terrain texture cache uses the same sub-image copies (hundreds
  * a second, with mip levels), so a texture is eligible only if it is not mipmapped. Decisions
  * are cached per texture id: g_ui_no holds ids we decided to leave alone. */
@@ -104,6 +104,25 @@ static void ui_upload(GLenum tg, int x, int y, int w, int h, const void *rgba)
     REAL(glPixelStorei)(GL_UNPACK_ALIGNMENT_, al); REAL(glPixelStorei)(GL_UNPACK_ROW_LENGTH_, rl);
 }
 
+/* The community patch mem.dll (Starsiege Players) rewrites every GL_NEAREST texture filter the
+ * game sets to GL_LINEAR, meant for the sky; on the HUD and font pages that smears the text.
+ * While it is loaded, enlarged UI pages are kept at GL_NEAREST, as the game draws them itself. */
+static int g_mem_dll;
+static int mem_dll_loaded(void)
+{
+    if (!g_mem_dll && GetModuleHandleA("mem.dll")) {
+        g_mem_dll = 1;
+        lg(1, "ui upscale: mem.dll is loaded; keeping enlarged HUD/menu pages sharp despite its forced smoothing");
+    }
+    return g_mem_dll;
+}
+static void ui_keep_sharp(GLenum tg)
+{
+    if (!mem_dll_loaded()) return;
+    REAL(glTexParameteri)(tg, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    REAL(glTexParameteri)(tg, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+}
+
 /* make the bound texture a k-times page (once), keeping what it already holds */
 static struct ui_page *ui_promote(GLenum tg, GLuint id, int k)
 {
@@ -128,7 +147,8 @@ static struct ui_page *ui_promote(GLenum tg, GLuint id, int k)
     REAL(glTexImage2D)(tg, 0, GL_RGBA8_, w * k, h * k, 0, GL_RGBA, GL_UNSIGNED_BYTE, big);
     REAL(glPixelStorei)(GL_UNPACK_ALIGNMENT_, al); REAL(glPixelStorei)(GL_UNPACK_ROW_LENGTH_, rl);
     free(big);
-    p = &g_pages[g_npages++]; p->id = id; p->w = w; p->h = h;
+    if (minf == GL_NEAREST || minf == GL_LINEAR) ui_keep_sharp(tg);
+    p = &g_pages[g_npages++]; memset(p, 0, sizeof *p); p->id = id; p->w = w; p->h = h;
     if (InterlockedIncrement(&st_ui_pages) <= 10) lg(1, "ui upscale: texture page %u %dx%d -> %dx%d", id, w, h, w * k, h * k);
     return p;
 }
@@ -186,8 +206,20 @@ static int ui_sub_image(GLenum tg, GLint lv, GLint x, GLint y, GLsizei w, GLsize
     if (lv > 0) { free(rgba); return 1; }   /* our page has generated mipmaps */
     struct ui_page *p = ui_promote(tg, id, k);
     if (!p) { free(rgba); return 0; }
+    /* A page the game repaints all the time is an animation (the main menu's schematics) or video:
+     * the pixel-art filter turns its dense, dithered frames into blobs, so those are enlarged
+     * pixel for pixel, exactly as the game shows them. */
+    if (!p->animated) {
+        DWORD now = GetTickCount();
+        if (!p->updates++ || now - p->t0 > 3000) { p->t0 = now; p->updates = 1; }
+        else if (p->updates >= 30) {
+            p->animated = 1;
+            LG_FIRST(20, 1, "ui upscale: texture page %u (%dx%d) is animated; enlarging it pixel for pixel", id, p->w, p->h);
+        }
+    }
     unsigned *big = ui_replacement(base, w, h, k);
-    if (big) InterlockedIncrement(&st_ui_hd); else big = ui_enlarge(rgba, w, h, k);
+    if (big) InterlockedIncrement(&st_ui_hd);
+    else big = p->animated ? ui_nearest(rgba, w, h, k) : ui_enlarge(rgba, w, h, k);
     free(rgba);
     if (!big) return 0;
     ui_upload(tg, x * k, y * k, w * k, h * k, big);

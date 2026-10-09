@@ -3,3 +3,4 @@ opengl32.dll
 gl_names.h
 thunks.S
 opengl32.def
+__pycache__/

@@ -28,7 +28,7 @@ SUPER, 3440x1440). It should also work on Windows, but that is untested.
   menus, HUD and text stay crisp: screen-space ambient occlusion, FXAA, and sharpening.
 - **A real HUD scale.** Found with Ghidra: Starsiege draws its HUD with C++ GUI controls, so
   sswrap hooks each HUD element's render call in memory and enlarges it around its screen
-  corner or edge, at full native resolution (retail 1.004 only; checked before patching).
+  corner or edge, at full native resolution (versions 1.004 and 1.003; checked before patching).
 - **Sharper HUD and menu art.** The HUD/menu bitmaps the game assembles at runtime are enlarged
   2x or 4x with a pixel-art filter (Scale2x) on their way to the GPU.
 - **Proper supersampling.** At render quality above native, every screen pixel averages all the
@@ -63,6 +63,15 @@ That's it. Details, uninstalling and notes are in `INSTALL-WINDOWS.txt` inside t
 `contrib/linux/starsiege.sh` is an example launcher that also pins the game to one CPU core,
 which removes stutter in this 1999 engine.
 
+### With the Starsiege Players build
+
+The community build from [starsiegeplayers.com](https://starsiegeplayers.com/) works too. Its
+default executable is version 1.003, and HUD scale and smooth text support both 1.003 and its
+alternative patched 1.004 executable. Keep its `mem.dll` (crash and server fixes; sswrap undoes
+only its forced texture smoothing, which shows seams between tiles), but remove its DxWnd files,
+`dinput.dll` and `dxwnd.dll`: DxWnd does the same job as sswrap and the two get in each other's
+way. In the game's video options, set the 3D hardware type to "Other" (OpenGL).
+
 ### The settings window
 
 | Option | What it does |
@@ -71,6 +80,7 @@ which removes stutter in this 1999 engine.
 | HUD scale | Enlarges the HUD meters (radar, shields, weapons, reticle, target, timer, chat) 1.25x-2x |
 | Render quality | The 3D world renders at your monitor's resolution (Native) or 2x/3x above it and is averaged down (supersampling) |
 | Sharper HUD and menu art | Runs the HUD, menu and font bitmaps through a 4x pixel-art filter (or HD replacements) before they are enlarged (`UiUpscale=4`) |
+| Smooth text | Redraws all game text (menus, briefings, chat, HUD readouts) from smoothed, high-resolution rebuilds of the game's own fonts, keeping the game's layout and colours (1.004 and 1.003; `TextHD`) |
 | Ambient occlusion, edge smoothing | The visual effects; applied to the 3D world only, never the HUD |
 | Ultrawide HUD | Pulls HUD elements anchored to the screen edges in to a 16:9-wide area in the middle (rewrites `hudLayout.prf`, keeping the original as `hudLayout.prf.sswrap-orig`) |
 
@@ -80,7 +90,7 @@ an RTX 4080 SUPER, versus a locked 165 at 2x).
 
 ### The HUD
 
-**HUD scale (retail 1.004).** Starsiege lays its HUD out in absolute screen pixels from fixed-size
+**HUD scale (1.004 and 1.003).** Starsiege lays its HUD out in absolute screen pixels from fixed-size
 pixel art, with no size setting of its own. sswrap found the HUD's GUI classes in the game with
 Ghidra and wraps each one's render call, scaling it around a shared screen anchor (the corner, edge
 centre or screen centre of its region) so neighbouring elements stay aligned while the game runs
@@ -89,7 +99,8 @@ drawn. Many HUD panels are painted by the game in software at their original res
 included, so leave **Sharper HUD and menu art** on: the pixel-art filter smooths them before they
 are enlarged.
 
-**Other game versions.** HUD scale only activates if the game's code is exactly version 1.004. On
+**Other game versions.** HUD scale only activates if the game's code is exactly version 1.004 (the retail CD's final
+patch) or 1.003 (the default in the [Starsiege Players](https://starsiegeplayers.com/) build). On
 any other build the window instead offers **HUD size**, the older method: the game runs at your
 monitor's resolution divided by the HUD size (so it lays the whole HUD out bigger) while the 3D
 world is still rendered at full sharpness.
@@ -114,7 +125,9 @@ you rearrange the HUD in the game, that arrangement becomes the new original.
 | `RenderScale` | 1 | Render at this multiple of the game's resolution, fractions allowed (set by the settings window) |
 | `AskOnLaunch` | 1 | Show the settings window at startup |
 | `UltrawideHud` | 0 | Keep the HUD within a centred 16:9 area (set by the settings window) |
-| `HudScale` | 1 | Enlarge the HUD meters 1.25x-2x at any game resolution (retail 1.004; set by the settings window) |
+| `HudScale` | 1 | Enlarge the HUD meters 1.25x-2x at any game resolution (1.004 and 1.003; set by the settings window) |
+| `TextHD` | 1 | Redraw game text from smoothed rebuilds of the game's fonts (1.004 and 1.003; set by the settings window) |
+| `TextTrace` | 0 | Diagnostics: log every distinct string the game draws |
 | `UiUpscale` | 1 | Enlarge HUD/menu/font bitmaps 2x or 4x with Scale2x, or with `sub_*.png` HD replacements |
 | `LinearFilter` | 1 | Smooth (1) or sharp pixel (0) scaling |
 | `AO`, `AORadius`, `AOStrength`, `AOMaxDistance` | 1, 3.0, 1.5, 400 | Ambient occlusion and its reach, darkness, fade distance |

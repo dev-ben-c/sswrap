@@ -1,7 +1,9 @@
 #!/bin/sh
 # Build/refresh an HD texture pack from sswrap's texture dump with Real-ESRGAN.
 # Only textures that are not in the load folder yet are processed, so re-running after more
-# play (with TextureDump=1) just adds the new ones.
+# play (with TextureDump=1) just adds the new ones. Then every set of textures that belong
+# together (sky panel rings, pictures cut into tiles such as the splash and menu screens) is
+# upscaled again as one image, so the pieces join seamlessly (stitch.py).
 #
 #   GAME_DIR=/path/to/Starsiege REALESRGAN=/path/to/realesrgan-ncnn-vulkan ./build.sh
 #
@@ -25,8 +27,17 @@ todo = [f for f in good if f[:-4] not in have]
 open(sys.argv[3], 'w').write('\n'.join(todo))
 print(f"{len(good)} usable textures, {len(todo)} new to upscale")
 PY
-[ -s "$work/todo.txt" ] || { echo "nothing new"; exit 0; }
-python3 "$here/prep.py" "$dump" "$work/todo.txt" "$work/in"
-"$REALESRGAN" -i "$work/in" -o "$work/out" -n "$MODEL" -s "$SCALE" -f png -m "$(dirname "$REALESRGAN")/models"
-python3 "$here/post.py" "$work/out" "$load" "$SCALE"
+if [ -s "$work/todo.txt" ]; then
+  python3 "$here/prep.py" "$dump" "$work/todo.txt" "$work/in"
+  "$REALESRGAN" -i "$work/in" -o "$work/out" -n "$MODEL" -s "$SCALE" -f png -m "$(dirname "$REALESRGAN")/models"
+  python3 "$here/post.py" "$work/out" "$load" "$SCALE"
+else
+  echo "no new textures"
+fi
+mkdir -p "$work/sets" "$work/sets_out"
+python3 "$here/stitch.py" find "$dump" "$work/sets"
+if ls "$work/sets"/*.png >/dev/null 2>&1; then
+  "$REALESRGAN" -i "$work/sets" -o "$work/sets_out" -n "$MODEL" -s "$SCALE" -f png -m "$(dirname "$REALESRGAN")/models"
+  python3 "$here/stitch.py" split "$work/sets_out" "$work/sets" "$load" "$SCALE"
+fi
 echo "load folder now has $(ls "$load" | wc -l) textures"

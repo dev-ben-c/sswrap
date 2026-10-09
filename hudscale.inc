@@ -1,4 +1,4 @@
-/* ------------------------------------------------------------------ HUD scale (Starsiege 1.004)
+/* ------------------------------------------------------------------ HUD scale (Starsiege 1.004 / 1.003)
  * Starsiege draws its HUD with SimGui control objects; each class renders itself through vtable
  * slot 30 (onRender). Found with Ghidra: the class names survive in Borland type descriptors,
  * which lead to each vtable. The game passes finished screen coordinates to OpenGL (identity
@@ -12,7 +12,9 @@
  *
  * Only display meters are scaled; buttons, dialogs and pop-ups are left alone so mouse clicks
  * still land where they are drawn. Nothing is patched unless every vtable slot still holds the
- * exact function address found in version 1.004, so other builds are never touched. */
+ * exact function address of a known build, so other builds are never touched. The 1.003 table
+ * (the community's Starsiege Players default) was found the same way and its functions verified
+ * to be the same code as 1.004's; the object layout is unchanged. */
 
 typedef void (WINAPI *PFN_glTranslatef)(GLfloat, GLfloat, GLfloat);
 typedef void (WINAPI *PFN_glScalef)(GLfloat, GLfloat, GLfloat);
@@ -21,22 +23,38 @@ typedef void (WINAPI *PFN_glPopMatrix)(void);
 typedef void (WINAPI *PFN_glMatrixMode)(GLenum);
 
 struct hud_class { DWORD slot; DWORD orig; const char *name; };
-static const struct hud_class g_hud_classes[] = {
-    { 0x0070269c, 0x005185b4, "HudMtrCtrl" },
-    { 0x00703548, 0x00529568, "HudMtrChatRecieve" },
-    { 0x007013e0, 0x0050fcb4, "HudBitmapCtrl" },
-    { 0x00701d04, 0x0051188c, "HudSimpleText" },
-    { 0x00702880, 0x0051c028, "HudMtrRadar" },
-    { 0x00702a5c, 0x0051f154, "HudMtrShields" },
-    { 0x00702c3c, 0x0051f898, "HudMtrAimReticle" },
-    { 0x00702e34, 0x0052469c, "HudMtrWeapDisplay" },
-    { 0x00702ff4, 0x005273c8, "HudMtrDamage" },
-    { 0x007031a0, 0x00527fb8, "HudMtrTarget" },
-    { 0x00703364, 0x0052886c, "HudMtrIntDamage" },
-    { 0x007039dc, 0x0052ace0, "HudMtrTimer" },
-    { 0x00703d04, 0x0052baf4, "HudMtrCommand" },
+#define N_HUD_CLASSES 13
+static const struct hud_build { const char *version; struct hud_class c[N_HUD_CLASSES]; } g_hud_builds[] = {
+    { "1.004", {
+        { 0x0070269c, 0x005185b4, "HudMtrCtrl" },
+        { 0x00703548, 0x00529568, "HudMtrChatRecieve" },
+        { 0x007013e0, 0x0050fcb4, "HudBitmapCtrl" },
+        { 0x00701d04, 0x0051188c, "HudSimpleText" },
+        { 0x00702880, 0x0051c028, "HudMtrRadar" },
+        { 0x00702a5c, 0x0051f154, "HudMtrShields" },
+        { 0x00702c3c, 0x0051f898, "HudMtrAimReticle" },
+        { 0x00702e34, 0x0052469c, "HudMtrWeapDisplay" },
+        { 0x00702ff4, 0x005273c8, "HudMtrDamage" },
+        { 0x007031a0, 0x00527fb8, "HudMtrTarget" },
+        { 0x00703364, 0x0052886c, "HudMtrIntDamage" },
+        { 0x007039dc, 0x0052ace0, "HudMtrTimer" },
+        { 0x00703d04, 0x0052baf4, "HudMtrCommand" } } },
+    { "1.003", {
+        { 0x006f2414, 0x00516118, "HudMtrCtrl" },
+        { 0x006f32c0, 0x005270c8, "HudMtrChatRecieve" },
+        { 0x006f1158, 0x0050d81c, "HudBitmapCtrl" },
+        { 0x006f1a7c, 0x0050f3f4, "HudSimpleText" },
+        { 0x006f25f8, 0x00519b8c, "HudMtrRadar" },
+        { 0x006f27d4, 0x0051ccb4, "HudMtrShields" },
+        { 0x006f29b4, 0x0051d3f8, "HudMtrAimReticle" },
+        { 0x006f2bac, 0x005221fc, "HudMtrWeapDisplay" },
+        { 0x006f2d6c, 0x00524f28, "HudMtrDamage" },
+        { 0x006f2f18, 0x00525b18, "HudMtrTarget" },
+        { 0x006f30dc, 0x005263cc, "HudMtrIntDamage" },
+        { 0x006f3754, 0x00528840, "HudMtrTimer" },
+        { 0x006f3a78, 0x00529634, "HudMtrCommand" } } },
 };
-#define N_HUD_CLASSES (int)(sizeof g_hud_classes / sizeof g_hud_classes[0])
+static const struct hud_class *g_hud_classes;   /* the running build's table, set by hud_supported */
 #define HUD_EXTENT_X 0x1a4
 #define HUD_EXTENT_Y 0x1a8
 
@@ -123,16 +141,26 @@ __asm__(
     "  ret   $8\n"
 );
 
-/* 1 if this is the game build the HUD hooks were made for (every slot holds its 1.004 address) */
+/* 1 if this is a game build the HUD hooks were made for (every slot holds that build's address) */
 static int hud_supported(void)
 {
-    for (int i = 0; i < N_HUD_CLASSES; i++) {
-        MEMORY_BASIC_INFORMATION mbi;
-        if (!VirtualQuery((void *)g_hud_classes[i].slot, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT ||
-            *(DWORD *)g_hud_classes[i].slot != g_hud_classes[i].orig)
-            return 0;
+    if (g_hud_classes) return 1;
+    for (int b = 0; b < (int)(sizeof g_hud_builds / sizeof g_hud_builds[0]); b++) {
+        const struct hud_class *c = g_hud_builds[b].c;
+        int i;
+        for (i = 0; i < N_HUD_CLASSES; i++) {
+            MEMORY_BASIC_INFORMATION mbi;
+            if (!VirtualQuery((void *)c[i].slot, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT ||
+                *(DWORD *)c[i].slot != c[i].orig)
+                break;
+        }
+        if (i == N_HUD_CLASSES) {
+            g_hud_classes = c;
+            lg(1, "hud scale: game build %s recognised", g_hud_builds[b].version);
+            return 1;
+        }
     }
-    return 1;
+    return 0;
 }
 
 static void hud_install(void)
@@ -140,7 +168,7 @@ static void hud_install(void)
     if (g_hud_installed || !cfg.enabled) return;
     if (cfg.hud_scale == 1.0f) { lg(1, "hud scale: off (HudScale=1)"); return; }
     if (!hud_supported()) {
-        lg(0, "hud scale: this game build is not version 1.004; HUD scale disabled");
+        lg(0, "hud scale: this game build is not 1.004 or 1.003; HUD scale disabled");
         return;
     }
     for (int i = 0; i < N_HUD_CLASSES; i++) {

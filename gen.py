@@ -23,6 +23,8 @@ HOOKED = {
     "glDrawArrays": 12, "glDrawElements": 16,
     # texture dump / replacement
     "glTexImage2D": 36, "glTexSubImage2D": 36, "glDeleteTextures": 8,
+    # keeps enlarged UI pages sharp when the community mem.dll forces smoothing
+    "glTexParameteri": 12,
 }
 missing = set(HOOKED) - set(names)
 assert not missing, missing

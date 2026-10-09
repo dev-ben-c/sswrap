@@ -55,8 +55,9 @@ static struct {
     float hud_scale;
     int ui_upscale;
     char masters[512];
+    int text_trace, text_hd;
 } cfg = { 1, 1, 200, 1, 10, 1.0f, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50, 0, 1, 1, 0, 1.0f, 1,
-          "master1.starsiegeplayers.com,master2.starsiegeplayers.com" };
+          "master1.starsiegeplayers.com,master2.starsiegeplayers.com", 0, 1 };
 
 static int g_vactive, g_vw, g_vh;       /* virtual (game-requested) display mode */
 static int g_rw, g_rh;                  /* real primary monitor size */
@@ -544,6 +545,7 @@ static void *WINAPI hk_gethostbyname(const char *name)
 #include "hudscale.inc"
 #include "fbo_present.inc"
 #include "textures.inc"
+#include "texthd.inc"
 #include "launcher.inc"
 
 /* ------------------------------------------------------------------ exported GL hooks */
@@ -568,7 +570,7 @@ BOOL WINAPI hk_wglMakeCurrent(HDC dc, HGLRC rc)
     }
     g_hdc = dc;
     g_hwnd = WindowFromDC(dc);
-    if (rc != g_res_ctx) { forget_gl_resources("new GL context"); tex_forget(); g_res_ctx = rc; }
+    if (rc != g_res_ctx) { forget_gl_resources("new GL context"); tex_forget(); text_forget(); g_res_ctx = rc; }
     if (cfg.enabled) {
         subclass_window();
         force_window_geometry("context made current");
@@ -587,7 +589,7 @@ HGLRC WINAPI hk_wglCreateContext(HDC dc)
 BOOL WINAPI hk_wglDeleteContext(HGLRC rc)
 {
     lg(1, "wglDeleteContext(%p)", (void *)rc);
-    if (rc == g_res_ctx) { forget_gl_resources("context deleted"); tex_forget(); g_res_ctx = NULL; }
+    if (rc == g_res_ctx) { forget_gl_resources("context deleted"); tex_forget(); text_forget(); g_res_ctx = NULL; }
     return REAL(wglDeleteContext)(rc);
 }
 
@@ -863,6 +865,8 @@ static void read_config(void)
     cfg.stats_sec = GetPrivateProfileIntA("sswrap", "StatsSeconds", cfg.stats_sec, ini);
     GetPrivateProfileStringA("sswrap", "BlockHosts", cfg.block_hosts, cfg.block_hosts, sizeof cfg.block_hosts, ini);
     GetPrivateProfileStringA("sswrap", "Masters", cfg.masters, cfg.masters, sizeof cfg.masters, ini);
+    cfg.text_trace = GetPrivateProfileIntA("sswrap", "TextTrace", cfg.text_trace, ini);
+    cfg.text_hd = GetPrivateProfileIntA("sswrap", "TextHD", cfg.text_hd, ini);
     cfg.ao = GetPrivateProfileIntA("sswrap", "AO", cfg.ao, ini);
     cfg.fxaa = GetPrivateProfileIntA("sswrap", "FXAA", cfg.fxaa, ini);
     cfg.ao_radius = ini_float(ini, "AORadius", cfg.ao_radius);
@@ -923,6 +927,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID res)
     build_mode_list();
     tex_init();
     hook_exe();
+    text_install();
     if (!cfg.ask_on_launch) hud_install();   /* otherwise installed after the startup window */
     return TRUE;
 }

@@ -83,17 +83,18 @@ static void add_res(int w, int h, const char *fmt)
 }
 
 /* The window, two layouts:
- *  - retail 1.004 (HUD hooks available): the game runs at the monitor's native resolution and
+ *  - 1.004 or 1.003 (HUD hooks available): the game runs at the monitor's native resolution and
  *    HUD scale enlarges the HUD meters; resolution is a separate, normally untouched choice.
  *  - other builds: no HUD hooks, so a bigger HUD means running the game at native / k
  *    ("HUD size"), with RenderScale keeping the 3D world sharp. */
 static const float g_huds[] = { 1.0f, 1.25f, 1.5f, 2.0f, 3.0f };      /* HUD size (other builds) */
 #define NHUDS 5
-static const float g_hscales[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };  /* HUD scale (1.004) */
+static const float g_hscales[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };  /* HUD scale (1.004/1.003) */
 #define NHSCALES 5
 static const int g_quals[] = { 1, 2, 3 };
 static int g_hud_ok;
 #define ID_UIUP 112
+#define ID_TEXT 113
 
 static void hud_res(float k, int *w, int *h) { *w = ((int)(g_rw / k + 0.5f)) & ~1; *h = ((int)(g_rh / k + 0.5f)) & ~1; }
 static int sel(HWND d, int id) { int i = (int)SendDlgItemMessageA(d, id, CB_GETCURSEL, 0, 0); return i < 0 ? 0 : i; }
@@ -225,6 +226,8 @@ static void show_launcher(void)
     ctl("STATIC", "", 0, 150, y, 406, 32, ID_HINT); y += 38;
 
     check("Sharper HUD and menu art (pixel-art upscaling)", y, ID_UIUP, cfg.ui_upscale > 1); y += 24;
+    HWND tx = check("Smooth text (redraws the game's fonts at full resolution)", y, ID_TEXT, cfg.text_hd); y += 24;
+    if (!text_supported()) { EnableWindow(tx, FALSE); SendMessageA(tx, BM_SETCHECK, BST_UNCHECKED, 0); }
     check("Ambient occlusion (soft contact shadows)", y, ID_AO, cfg.ao); y += 24;
     check("Edge smoothing and sharpening (FXAA)", y, ID_AA, cfg.fxaa || cfg.sharpen > 0); y += 24;
     HWND uw = check("Ultrawide HUD: keep the HUD within a 16:9 area in the centre", y, ID_UWHUD, cfg.ultrawide_hud); y += 24;
@@ -253,12 +256,14 @@ static void launcher_capture_and_apply(HWND h)
     launcher_choice(h, &gw, &gh, &sc);
     float hs = g_hud_ok ? g_hscales[sel(h, ID_HSCALE)] : 1.0f;
     int ui = checked(h, ID_UIUP), ao = checked(h, ID_AO), aa = checked(h, ID_AA);
+    int tx = IsWindowEnabled(GetDlgItem(h, ID_TEXT)) ? checked(h, ID_TEXT) : cfg.text_hd;  /* unavailable: keep the setting */
     int uw = checked(h, ID_UWHUD) && IsWindowEnabled(GetDlgItem(h, ID_UWHUD)), ask = checked(h, ID_ASK);
     write_game_res(gw, gh);
     add_mode(gw, gh);                                   /* so the game's own menu can show it too */
     cfg.render_scale = sc; snprintf(v, sizeof v, "%.4g", sc); ini_set("RenderScale", v);
     cfg.hud_scale = hs; snprintf(v, sizeof v, "%.4g", hs); ini_set("HudScale", v);
     cfg.ui_upscale = ui ? 4 : 1; ini_set("UiUpscale", ui ? "4" : "1");
+    cfg.text_hd = tx; ini_set("TextHD", tx ? "1" : "0");
     cfg.ao = ao; ini_set("AO", ao ? "1" : "0");
     cfg.fxaa = aa; ini_set("FXAA", aa ? "1" : "0");
     if (aa && cfg.sharpen <= 0) cfg.sharpen = 0.4f;
@@ -267,8 +272,8 @@ static void launcher_capture_and_apply(HWND h)
     cfg.ultrawide_hud = uw; ini_set("UltrawideHud", uw ? "1" : "0");
     apply_hud_layout(uw, gw, gh);
     cfg.ask_on_launch = ask; ini_set("AskOnLaunch", ask ? "1" : "0");
-    lg(1, "launcher: game %dx%d, RenderScale %.2f, HudScale %.2f, UiUpscale %d, AO %d, FXAA %d, ultrawide HUD %d, ask next time %d",
-       gw, gh, sc, hs, cfg.ui_upscale, ao, aa, uw, ask);
+    lg(1, "launcher: game %dx%d, RenderScale %.2f, HudScale %.2f, UiUpscale %d, TextHD %d, AO %d, FXAA %d, ultrawide HUD %d, ask next time %d",
+       gw, gh, sc, hs, cfg.ui_upscale, tx, ao, aa, uw, ask);
 }
 
 /* ---- ultrawide HUD layout

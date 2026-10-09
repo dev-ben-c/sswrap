@@ -25,6 +25,7 @@ static char g_tex_dir[MAX_PATH];           /* ...\sswrap_textures */
 static struct { char name[48]; } *g_load_names; static int g_nload;   /* replacements on disk */
 static unsigned long long *g_dumped; static int g_ndumped, g_cap_dumped;
 static GLuint g_replaced[4096]; static int g_nreplaced;               /* texture ids we replaced */
+static short g_repl_w[4096], g_repl_h[4096];                            /* ... and their original sizes */
 static LONG st_uploads, st_dumped, st_replaced, st_unsupported;
 
 /* bytes per pixel for the formats we understand (unsigned byte only); 0 = unsupported */
@@ -168,7 +169,12 @@ static int is_replaced(GLuint id)
 }
 static void unmark_replaced(GLuint id)
 {
-    for (int i = 0; i < g_nreplaced; i++) if (g_replaced[i] == id) { g_replaced[i] = g_replaced[--g_nreplaced]; return; }
+    for (int i = 0; i < g_nreplaced; i++)
+        if (g_replaced[i] == id) {
+            g_nreplaced--;
+            g_replaced[i] = g_replaced[g_nreplaced]; g_repl_w[i] = g_repl_w[g_nreplaced]; g_repl_h[i] = g_repl_h[g_nreplaced];
+            return;
+        }
 }
 
 static GLuint bound_tex(void) { GLint id = 0; REAL(glGetIntegerv)(GL_TEXTURE_BINDING_2D, &id); return (GLuint)id; }
@@ -212,7 +218,7 @@ void WINAPI hk_glTexImage2D(GLenum tg, GLint lv, GLint ifmt, GLsizei w, GLsizei 
             REAL(glTexParameteri)(tg, GL_GENERATE_MIPMAP_, GL_TRUE);
             REAL(glTexImage2D)(tg, 0, GL_RGBA8_, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
             stbi_image_free(img);
-            if (g_nreplaced < 4096) g_replaced[g_nreplaced++] = id;
+            if (g_nreplaced < 4096) { g_repl_w[g_nreplaced] = (short)w; g_repl_h[g_nreplaced] = (short)h; g_replaced[g_nreplaced++] = id; }
             if (InterlockedIncrement(&st_replaced) <= 20) lg(1, "textures: replaced %s with %dx%d %s", base, rw, rh, rep);
             return;
         }
@@ -231,14 +237,95 @@ void WINAPI hk_glTexImage2D(GLenum tg, GLint lv, GLint ifmt, GLsizei w, GLsizei 
     REAL(glTexImage2D)(tg, lv, ifmt, w, h, bd, fmt, type, px);
 }
 
+/* The game is editing a texture we replaced (a texture page that happened to start out matching
+ * an HD file, or a menu tile a video plays into): the replacement is wrong for it, so the texture
+ * goes back to its original size, refilled with a box-filtered copy of the HD picture, and the
+ * game's update then lands where it expects. */
+static void unreplace(GLenum tg, GLuint id)
+{
+    int i = 0;
+    while (i < g_nreplaced && g_replaced[i] != id) i++;
+    if (i == g_nreplaced) return;
+    int ow = g_repl_w[i], oh = g_repl_h[i];
+    GLint W = 0, H = 0;
+    REAL(glGetTexLevelParameteriv)(tg, 0, GL_TEXTURE_WIDTH_, &W);
+    REAL(glGetTexLevelParameteriv)(tg, 0, GL_TEXTURE_HEIGHT_, &H);
+    unsigned *big = W > 0 && H > 0 ? malloc((size_t)W * H * 4) : NULL, *small = malloc((size_t)ow * oh * 4);
+    if (big && small) {
+        GLint pa; REAL(glGetIntegerv)(GL_PACK_ALIGNMENT_, &pa); REAL(glPixelStorei)(GL_PACK_ALIGNMENT_, 4);
+        REAL(glGetTexImage)(tg, 0, GL_RGBA, GL_UNSIGNED_BYTE, big);
+        REAL(glPixelStorei)(GL_PACK_ALIGNMENT_, pa);
+        int kx = W / ow, ky = H / oh;
+        if (kx < 1) kx = 1;
+        if (ky < 1) ky = 1;
+        for (int y = 0; y < oh; y++) for (int x = 0; x < ow; x++) {
+            unsigned s[4] = { 0 };
+            for (int dy = 0; dy < ky; dy++) for (int dx = 0; dx < kx; dx++) {
+                int sx = x * kx + dx, sy = y * ky + dy;
+                unsigned c = sx < W && sy < H ? big[sy * W + sx] : 0;
+                for (int ch = 0; ch < 4; ch++) s[ch] += c >> (8 * ch) & 255;
+            }
+            unsigned n = kx * ky, c = 0;
+            for (int ch = 0; ch < 4; ch++) c |= (s[ch] / n) << (8 * ch);
+            small[y * ow + x] = c;
+        }
+        GLint al; REAL(glGetIntegerv)(GL_UNPACK_ALIGNMENT_, &al); REAL(glPixelStorei)(GL_UNPACK_ALIGNMENT_, 4);
+        GLint rl; REAL(glGetIntegerv)(GL_UNPACK_ROW_LENGTH_, &rl); REAL(glPixelStorei)(GL_UNPACK_ROW_LENGTH_, 0);
+        REAL(glTexImage2D)(tg, 0, GL_RGBA8_, ow, oh, 0, GL_RGBA, GL_UNSIGNED_BYTE, small);
+        REAL(glPixelStorei)(GL_UNPACK_ALIGNMENT_, al); REAL(glPixelStorei)(GL_UNPACK_ROW_LENGTH_, rl);
+    }
+    free(big); free(small);
+    unmark_replaced(id);
+    LG_FIRST(10, 1, "textures: texture %u is updated by the game; using it at its original %dx%d instead of the HD version", id, ow, oh);
+}
+
 void WINAPI hk_glTexSubImage2D(GLenum tg, GLint lv, GLint x, GLint y, GLsizei w, GLsizei h, GLenum fmt, GLenum type, const GLvoid *px)
 {
     if (g_nreplaced && tg == GL_TEXTURE_2D && is_replaced(bound_tex())) {
-        LG_FIRST(5, 1, "textures: ignoring a %dx%d sub-image update to a replaced texture", w, h);
-        return;
+        if (lv > 0) return;                     /* our replacement has its own generated mipmaps */
+        unreplace(tg, bound_tex());             /* a live texture after all: back to the game's size */
     }
     if (ui_sub_image(tg, lv, x, y, w, h, fmt, type, px)) return;
     REAL(glTexSubImage2D)(tg, lv, x, y, w, h, fmt, type, px);
+}
+
+/* Undo mem.dll's texture filtering. mem.dll rewrites the GL_NEAREST filters the game sets on 2D
+ * art to GL_LINEAR, which samples across tile borders: the splash screen and sky are drawn as
+ * tiles and show seams. The game keeps its GL entry points in a table (filled through
+ * GetProcAddress); mem.dll replaces the glTexParameteri entry with its own function, which then
+ * calls ours. Once that has happened we put tp_pre in front of it: it notes the filter the game
+ * actually asked for, and hk_glTexParameteri restores it after mem.dll's rewrite. */
+typedef void (WINAPI *PFN_tp)(GLenum, GLenum, GLint);
+static DWORD *g_tp_slot;                        /* the game's glTexParameteri table entry */
+static PFN_tp g_tp_next;
+static int g_tp_have; static GLint g_tp_intent;
+void WINAPI hk_glTexParameteri(GLenum tg, GLenum pname, GLint param);
+static void WINAPI tp_pre(GLenum tg, GLenum pname, GLint param)
+{
+    g_tp_have = 1; g_tp_intent = param;
+    g_tp_next(tg, pname, param);
+    g_tp_have = 0;
+}
+static void tp_watch(void)
+{
+    DWORD v = *g_tp_slot;
+    if (!v || v == (DWORD)tp_pre || v == (DWORD)hk_glTexParameteri) return;
+    g_tp_next = (PFN_tp)v;
+    *g_tp_slot = (DWORD)tp_pre;
+    lg(1, "textures: another hook (mem.dll) wraps glTexParameteri; keeping the game's own texture filters");
+}
+
+void WINAPI hk_glTexParameteri(GLenum tg, GLenum pname, GLint param)
+{
+    if (g_tp_slot) {
+        if (!g_tp_have) tp_watch();
+        else if (pname == GL_TEXTURE_MIN_FILTER || pname == GL_TEXTURE_MAG_FILTER) param = g_tp_intent;
+    }
+    if (param == GL_LINEAR && tg == GL_TEXTURE_2D && g_npages &&
+        (pname == GL_TEXTURE_MIN_FILTER || pname == GL_TEXTURE_MAG_FILTER) &&
+        mem_dll_loaded() && ui_page_find(bound_tex()))
+        param = GL_NEAREST;                     /* undo mem.dll's forced smoothing on enlarged UI pages */
+    REAL(glTexParameteri)(tg, pname, param);
 }
 
 void WINAPI hk_glDeleteTextures(GLsizei n, const GLuint *ids)
