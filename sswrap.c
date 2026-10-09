@@ -49,7 +49,8 @@ static struct {
     char extra_modes[512];
     float cpu_fov, depth_scale;
     int min_world_draws;
-} cfg = { 1, 1, 1, 200, 1, 10, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50 };
+    int tex_dump, tex_replace;
+} cfg = { 1, 1, 1, 200, 1, 10, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50, 0, 1 };
 
 static int g_vactive, g_vw, g_vh;       /* virtual (game-requested) display mode */
 static int g_rw, g_rh;                  /* real primary monitor size */
@@ -468,6 +469,7 @@ static void *WINAPI hk_gethostbyname(const char *name)
 }
 
 #include "fbo_present.inc"
+#include "textures.inc"
 
 /* ------------------------------------------------------------------ exported GL hooks */
 BOOL WINAPI hk_wglSwapBuffers(HDC dc) { return present(dc); }
@@ -491,7 +493,7 @@ BOOL WINAPI hk_wglMakeCurrent(HDC dc, HGLRC rc)
     }
     g_hdc = dc;
     g_hwnd = WindowFromDC(dc);
-    if (rc != g_res_ctx) { forget_gl_resources("new GL context"); g_res_ctx = rc; }
+    if (rc != g_res_ctx) { forget_gl_resources("new GL context"); tex_forget(); g_res_ctx = rc; }
     if (cfg.enabled) {
         subclass_window();
         force_window_geometry("context made current");
@@ -510,7 +512,7 @@ HGLRC WINAPI hk_wglCreateContext(HDC dc)
 BOOL WINAPI hk_wglDeleteContext(HGLRC rc)
 {
     lg(1, "wglDeleteContext(%p)", (void *)rc);
-    if (rc == g_res_ctx) { forget_gl_resources("context deleted"); g_res_ctx = NULL; }
+    if (rc == g_res_ctx) { forget_gl_resources("context deleted"); tex_forget(); g_res_ctx = NULL; }
     return REAL(wglDeleteContext)(rc);
 }
 
@@ -790,6 +792,8 @@ static void read_config(void)
     cfg.cpu_fov = ini_float(ini, "FOV", cfg.cpu_fov);
     cfg.depth_scale = ini_float(ini, "DepthScale", cfg.depth_scale);
     cfg.min_world_draws = GetPrivateProfileIntA("sswrap", "MinWorldDraws", cfg.min_world_draws, ini);
+    cfg.tex_dump = GetPrivateProfileIntA("sswrap", "TextureDump", cfg.tex_dump, ini);
+    cfg.tex_replace = GetPrivateProfileIntA("sswrap", "TextureReplace", cfg.tex_replace, ini);
 }
 
 static void open_log(void)
@@ -831,6 +835,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID res)
     g_rw = dm.dmPelsWidth; g_rh = dm.dmPelsHeight;
     lg(0, "real primary monitor: %dx%d", g_rw, g_rh);
     build_mode_list();
+    tex_init();
     hook_exe();
     return TRUE;
 }

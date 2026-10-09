@@ -21,6 +21,8 @@ HOOKED = {
     # diagnostics for games that project on the CPU (no GL 3D camera): depth-state changes
     "glEnable": 4, "glDisable": 4, "glDepthMask": 4, "glDepthFunc": 4, "glDepthRange": 16, "glBegin": 4,
     "glDrawArrays": 12, "glDrawElements": 16,
+    # texture dump / replacement
+    "glTexImage2D": 36, "glTexSubImage2D": 36, "glDeleteTextures": 8,
 }
 missing = set(HOOKED) - set(names)
 assert not missing, missing
