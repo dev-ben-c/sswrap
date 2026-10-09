@@ -19,6 +19,11 @@ SUPER, 3440x1440). It should also work on Windows, but that is untested.
 - **Fixes the multi-second freezes.** Starsiege looks up the long-dead Dynamix master and IRC
   servers on its render thread; each failed DNS lookup froze the game for ~2 s, repeatedly when
   hosting multiplayer. Those lookups now fail instantly.
+- **Online multiplayer server list works again.** The game's lookups of the old Dynamix master
+  servers are answered with the community-run replacements from
+  [Starsiege Players](https://starsiegeplayers.com/), so the in-game server browser lists the
+  live community servers without editing any game files. Games you host are listed there too
+  (other players can only join if UDP port 29001 reaches your PC, e.g. through a port forward).
 - **Visual effects** (each switchable), applied to the 3D world only, *before* the HUD is drawn, so
   menus, HUD and text stay crisp: screen-space ambient occlusion, FXAA, and sharpening.
 - **A real HUD scale.** Found with Ghidra: Starsiege draws its HUD with C++ GUI controls, so
@@ -117,6 +122,7 @@ you rearrange the HUD in the game, that arrangement becomes the new original.
 | `Sharpen` | 0.4 | Sharpening amount, 0 = off |
 | `ExtraModes` | | Extra resolutions for the menu, e.g. `1720x720,2880x1200` |
 | `BlockHosts` | `dynamix.com` | Hostnames whose DNS lookups fail instantly |
+| `Masters` | `master1.starsiegeplayers.com,master2.starsiegeplayers.com` | Community master servers that answer the game's lookups of the old Dynamix ones, so the in-game server list works |
 | `LogLevel` | 1 | 0 errors/stalls only, 1 normal, 2 verbose, 3 everything |
 | `StallMs` | 200 | Frame gap that counts as a stall (0 disables the watchdog) |
 | `StatsSeconds` | 10 | fps/worst-frame summary interval (0 = off) |

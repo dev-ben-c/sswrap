@@ -54,7 +54,9 @@ static struct {
     int ask_on_launch, ultrawide_hud;
     float hud_scale;
     int ui_upscale;
-} cfg = { 1, 1, 200, 1, 10, 1.0f, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50, 0, 1, 1, 0, 1.0f, 1 };
+    char masters[512];
+} cfg = { 1, 1, 200, 1, 10, 1.0f, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50, 0, 1, 1, 0, 1.0f, 1,
+          "master1.starsiegeplayers.com,master2.starsiegeplayers.com" };
 
 static int g_vactive, g_vw, g_vh;       /* virtual (game-requested) display mode */
 static int g_rw, g_rh;                  /* real primary monitor size */
@@ -461,10 +463,70 @@ static int host_blocked(const char *h)
     return 0;
 }
 
+/* Master servers: the game only knows ss1m1-3.masters.dynamix.com, offline since ~2000. Their
+ * lookups are answered with the community replacements listed in Masters= (same protocol and
+ * port), so the in-game server list works again. Resolved once on a worker thread with a time
+ * limit, so a slow DNS server can't freeze the game the way the dead names used to. */
+struct hostent_ { char *h_name; char **h_aliases; short h_addrtype, h_length; char **h_addr_list; };
+static struct { char name[128]; struct hostent_ he; char *aliases[1], *addrs[9]; char addr[8][4]; int state; } g_master[4];
+static int g_nmasters = -1;
+
+static DWORD WINAPI master_resolve(LPVOID arg)
+{
+    for (int i = 0; i < g_nmasters; i++) {
+        struct hostent_ *h = r_gethostbyname(g_master[i].name);
+        int n = 0;
+        if (h && h->h_length == 4)
+            for (; n < 8 && h->h_addr_list[n]; n++) memcpy(g_master[i].addr[n], h->h_addr_list[n], 4);
+        for (int k = 0; k < n; k++) g_master[i].addrs[k] = g_master[i].addr[k];
+        g_master[i].addrs[n] = NULL; g_master[i].aliases[0] = NULL;
+        g_master[i].he = (struct hostent_){ g_master[i].name, g_master[i].aliases, 2 /* AF_INET */, 4, g_master[i].addrs };
+        InterlockedExchange((LONG *)&g_master[i].state, n ? 1 : -1);
+        if (n) lg(1, "master server %s is %u.%u.%u.%u", g_master[i].name, (BYTE)g_master[i].addr[0][0],
+                  (BYTE)g_master[i].addr[0][1], (BYTE)g_master[i].addr[0][2], (BYTE)g_master[i].addr[0][3]);
+        else lg(0, "master server %s: DNS lookup failed", g_master[i].name);
+    }
+    return 0;
+}
+
+/* the replacement for a ssNmK.masters.dynamix.com lookup; 0 = not a master name, -1 = unavailable */
+static void *master_lookup(const char *name, int *handled)
+{
+    static const char sfx[] = ".masters.dynamix.com";
+    size_t hl = strlen(name), sl = sizeof sfx - 1;
+    *handled = 0;
+    if (hl <= sl || lstrcmpiA(name + hl - sl, sfx)) return NULL;
+    if (g_nmasters < 0) {                       /* first master lookup: parse Masters= and start resolving */
+        char list[512], *tok, *ctx = NULL;
+        g_nmasters = 0;
+        lstrcpynA(list, cfg.masters, sizeof list);
+        for (tok = strtok_r(list, ", ", &ctx); tok && g_nmasters < 4; tok = strtok_r(NULL, ", ", &ctx))
+            lstrcpynA(g_master[g_nmasters++].name, tok, sizeof g_master[0].name);
+        if (g_nmasters) {
+            HANDLE t = CreateThread(NULL, 0, master_resolve, NULL, 0, NULL);
+            if (t) { WaitForSingleObject(t, 3000); CloseHandle(t); }
+        } else lg(1, "Masters= is empty: the in-game server list stays off");
+    }
+    if (!g_nmasters) return NULL;               /* fall through to BlockHosts */
+    *handled = 1;
+    char c = name[hl - sl - 1];                 /* ss1m<N>: N picks the replacement */
+    int i = (c >= '1' && c <= '9' ? c - '1' : 0) % g_nmasters;
+    if (g_master[i].state != 1) return NULL;
+    LG_FIRST(6, 1, "gethostbyname(%s) -> community master %s", name, g_master[i].name);
+    return &g_master[i].he;
+}
+
 static void *WINAPI hk_gethostbyname(const char *name)
 {
-    int why;
+    int why, handled;
     g_last_hook = "gethostbyname";
+    if (name && cfg.masters[0]) {
+        void *m = master_lookup(name, &handled);
+        if (handled) {
+            if (!m && r_WSASetLastError) r_WSASetLastError(WSAHOST_NOT_FOUND_);
+            return m;
+        }
+    }
     if (name && (why = host_blocked(name))) {
         LG_FIRST(40, 1, "gethostbyname(%s): failed instantly (%s)", name, why == 1 ? "BlockHosts" : "failed before");
         if (r_WSASetLastError) r_WSASetLastError(WSAHOST_NOT_FOUND_);
@@ -772,7 +834,7 @@ static void hook_exe(void)
         H("WSOCK32.dll", ws, gethostbyname);
         *(FARPROC *)&r_WSASetLastError = GetProcAddress(GetModuleHandleA("ws2_32.dll"), "WSASetLastError");
     }
-    lg(1, "DNS: lookups of [%s] fail instantly", cfg.block_hosts);
+    lg(1, "DNS: lookups of [%s] fail instantly; master servers -> [%s]", cfg.block_hosts, cfg.masters);
 #undef H
     lg(1, "hooked %d imports of the game exe", n);
 }
@@ -800,6 +862,7 @@ static void read_config(void)
     cfg.filter_linear = GetPrivateProfileIntA("sswrap", "LinearFilter", cfg.filter_linear, ini);
     cfg.stats_sec = GetPrivateProfileIntA("sswrap", "StatsSeconds", cfg.stats_sec, ini);
     GetPrivateProfileStringA("sswrap", "BlockHosts", cfg.block_hosts, cfg.block_hosts, sizeof cfg.block_hosts, ini);
+    GetPrivateProfileStringA("sswrap", "Masters", cfg.masters, cfg.masters, sizeof cfg.masters, ini);
     cfg.ao = GetPrivateProfileIntA("sswrap", "AO", cfg.ao, ini);
     cfg.fxaa = GetPrivateProfileIntA("sswrap", "FXAA", cfg.fxaa, ini);
     cfg.ao_radius = ini_float(ini, "AORadius", cfg.ao_radius);
