@@ -18,8 +18,8 @@ SUPER, 3440x1440). It should also work on Windows, but that is untested.
 - **Fixes the multi-second freezes.** Starsiege looks up the long-dead Dynamix master and IRC
   servers on its render thread; each failed DNS lookup froze the game for ~2 s, repeatedly when
   hosting multiplayer. Those lookups now fail instantly.
-- **Visual effects** (each switchable): screen-space ambient occlusion applied *before* the HUD is
-  drawn (so the HUD stays clean), FXAA, and contrast-adaptive sharpening.
+- **Visual effects** (each switchable), applied to the 3D world only, *before* the HUD is drawn, so
+  menus, HUD and text stay crisp: screen-space ambient occlusion, FXAA, and sharpening.
 - **Debugging built in.** `sswrap.log` records display/window/context events, fps summaries, and
   slow frames. A watchdog thread notices when frames stop, briefly suspends the render thread,
   and logs where it is stuck as `module!function+offset`. That is how the DNS freeze was found.

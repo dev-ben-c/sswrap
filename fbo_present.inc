@@ -62,6 +62,7 @@ static void (WINAPI *pActiveTexture)(GLenum);
 static GLuint g_color_tex, g_depth_tex;           /* game's render targets */
 static GLuint g_colonly_fbo;                      /* color texture only (AO multiply target) */
 static GLuint g_ao_tex, g_ao_fbo;                 /* raw AO */
+static GLuint g_tmp_tex, g_tmp_fbo;               /* copy of the scene for FXAA/sharpen */
 static GLuint g_prog_ao, g_prog_aoapply, g_prog_present;
 static int g_shaders_ok = -1;                     /* -1 not tried, 0 failed, 1 ok */
 
@@ -256,9 +257,9 @@ static void destroy_fbo(void)
 {
     if (!g_fbo) return;
     pBindFramebuffer(GL_FRAMEBUFFER, 0);
-    GLuint f[3] = { g_fbo, g_colonly_fbo, g_ao_fbo }, t[3] = { g_color_tex, g_depth_tex, g_ao_tex };
-    pDeleteFramebuffers(3, f); REAL(glDeleteTextures)(3, t);
-    g_fbo = g_colonly_fbo = g_ao_fbo = g_color_tex = g_depth_tex = g_ao_tex = 0;
+    GLuint f[4] = { g_fbo, g_colonly_fbo, g_ao_fbo, g_tmp_fbo }, t[4] = { g_color_tex, g_depth_tex, g_ao_tex, g_tmp_tex };
+    pDeleteFramebuffers(4, f); REAL(glDeleteTextures)(4, t);
+    g_fbo = g_colonly_fbo = g_ao_fbo = g_color_tex = g_depth_tex = g_ao_tex = g_tmp_fbo = g_tmp_tex = 0;
     g_fbo_ready = 0; g_scale = 1;
 }
 
@@ -270,6 +271,7 @@ static void forget_gl_resources(const char *why)
 {
     if (g_fbo || g_prog_present || g_shaders_ok > 0) lg(1, "gl: forgetting our objects (%s)", why);
     g_fbo = g_colonly_fbo = g_ao_fbo = g_color_tex = g_depth_tex = g_ao_tex = 0;
+    g_tmp_fbo = g_tmp_tex = 0;
     g_fbo_ready = 0; g_scale = 1;
     g_prog_ao = g_prog_aoapply = g_prog_present = 0;
     g_shaders_ok = -1;
@@ -289,7 +291,10 @@ static void build_fbo(void)
     g_color_tex = make_tex(GL_RGBA8_, GL_RGBA, GL_UNSIGNED_BYTE, g_fbw, g_fbh, cfg.filter_linear);
     g_depth_tex = make_tex(GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL_, GL_UNSIGNED_INT_24_8_, g_fbw, g_fbh, 0);
     g_ao_tex = make_tex(GL_R8_, GL_RED_, GL_UNSIGNED_BYTE, g_fbw, g_fbh, 0);
+    g_tmp_tex = make_tex(GL_RGBA8_, GL_RGBA, GL_UNSIGNED_BYTE, g_fbw, g_fbh, 1);
     REAL(glPopAttrib)();
+    pGenFramebuffers(1, &g_tmp_fbo); pBindFramebuffer(GL_FRAMEBUFFER, g_tmp_fbo);
+    pFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_tmp_tex, 0);
     pGenFramebuffers(1, &g_ao_fbo); pBindFramebuffer(GL_FRAMEBUFFER, g_ao_fbo);
     pFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_ao_tex, 0);
     pGenFramebuffers(1, &g_colonly_fbo); pBindFramebuffer(GL_FRAMEBUFFER, g_colonly_fbo);
@@ -315,42 +320,65 @@ static int is_window_buffer(GLenum m)
            m == GL_LEFT || m == GL_FRONT_AND_BACK;
 }
 
-/* ---- ambient occlusion pass (runs between the 3D world and the HUD) */
-static void apply_ao(const char *where)
+/* ---- scene effects (run between the 3D world and the HUD, so menus, HUD and text are
+ * never touched): ambient occlusion, then FXAA and sharpening */
+static void apply_scene_fx(const char *where)
 {
-    if (!cfg.ao || !g_fbo_ready || !g_persp_seen || g_ao_done || !shaders_ready()) return;
+    int ao = cfg.ao, aa = cfg.fxaa || cfg.sharpen > 0;
+    if ((!ao && !aa) || !g_fbo_ready || !g_persp_seen || g_ao_done || !shaders_ready()) return;
     g_ao_done = 1;
     pass_begin();
     REAL(glViewport)(0, 0, g_fbw, g_fbh);
-    /* 1: raw AO from depth (depth texture is read, not attached to the target: no feedback loop) */
-    pBindFramebuffer(GL_FRAMEBUFFER, g_ao_fbo);
-    REAL(glDrawBuffer)(GL_COLOR_ATTACHMENT0);
-    pUseProgram(g_prog_ao);
-    bind_tex(0, g_depth_tex);
-    pUniform1i(pGetUniformLocation(g_prog_ao, "uDepth"), 0);
-    pUniform2f(pGetUniformLocation(g_prog_ao, "uTexel"), 1.0f / g_fbw, 1.0f / g_fbh);
-    pUniform4f(pGetUniformLocation(g_prog_ao, "uProj"), g_proj[0], g_proj[1], g_proj[2], g_proj[3]);
-    pUniform1f(pGetUniformLocation(g_prog_ao, "uRadius"), cfg.ao_radius);
-    pUniform1f(pGetUniformLocation(g_prog_ao, "uStrength"), cfg.ao_strength);
-    pUniform1f(pGetUniformLocation(g_prog_ao, "uMaxDist"), cfg.ao_max_dist);
-    quad();
-    /* 2: blur and multiply into the scene color (target holds only the color texture) */
-    pBindFramebuffer(GL_FRAMEBUFFER, g_colonly_fbo);
-    REAL(glDrawBuffer)(GL_COLOR_ATTACHMENT0);
-    REAL(glEnable)(GL_BLEND); REAL(glBlendFunc)(GL_ZERO, GL_SRC_COLOR); REAL(glColorMask)(1, 1, 1, 0);
-    pUseProgram(g_prog_aoapply);
-    bind_tex(0, g_ao_tex); bind_tex(1, g_depth_tex);
-    pUniform1i(pGetUniformLocation(g_prog_aoapply, "uAO"), 0);
-    pUniform1i(pGetUniformLocation(g_prog_aoapply, "uDepth"), 1);
-    pUniform2f(pGetUniformLocation(g_prog_aoapply, "uTexel"), 1.0f / g_fbw, 1.0f / g_fbh);
-    pUniform4f(pGetUniformLocation(g_prog_aoapply, "uProj"), g_proj[0], g_proj[1], g_proj[2], g_proj[3]);
-    quad();
+    if (ao) {
+        /* 1: raw AO from depth (depth texture is read, not attached to the target) */
+        pBindFramebuffer(GL_FRAMEBUFFER, g_ao_fbo);
+        REAL(glDrawBuffer)(GL_COLOR_ATTACHMENT0);
+        pUseProgram(g_prog_ao);
+        bind_tex(0, g_depth_tex);
+        pUniform1i(pGetUniformLocation(g_prog_ao, "uDepth"), 0);
+        pUniform2f(pGetUniformLocation(g_prog_ao, "uTexel"), 1.0f / g_fbw, 1.0f / g_fbh);
+        pUniform4f(pGetUniformLocation(g_prog_ao, "uProj"), g_proj[0], g_proj[1], g_proj[2], g_proj[3]);
+        pUniform1f(pGetUniformLocation(g_prog_ao, "uRadius"), cfg.ao_radius);
+        pUniform1f(pGetUniformLocation(g_prog_ao, "uStrength"), cfg.ao_strength);
+        pUniform1f(pGetUniformLocation(g_prog_ao, "uMaxDist"), cfg.ao_max_dist);
+        quad();
+        /* 2: blur and multiply into the scene color (target holds only the color texture) */
+        pBindFramebuffer(GL_FRAMEBUFFER, g_colonly_fbo);
+        REAL(glDrawBuffer)(GL_COLOR_ATTACHMENT0);
+        REAL(glEnable)(GL_BLEND); REAL(glBlendFunc)(GL_ZERO, GL_SRC_COLOR); REAL(glColorMask)(1, 1, 1, 0);
+        pUseProgram(g_prog_aoapply);
+        bind_tex(0, g_ao_tex); bind_tex(1, g_depth_tex);
+        pUniform1i(pGetUniformLocation(g_prog_aoapply, "uAO"), 0);
+        pUniform1i(pGetUniformLocation(g_prog_aoapply, "uDepth"), 1);
+        pUniform2f(pGetUniformLocation(g_prog_aoapply, "uTexel"), 1.0f / g_fbw, 1.0f / g_fbh);
+        pUniform4f(pGetUniformLocation(g_prog_aoapply, "uProj"), g_proj[0], g_proj[1], g_proj[2], g_proj[3]);
+        quad();
+        REAL(glDisable)(GL_BLEND); REAL(glColorMask)(1, 1, 1, 1);
+    }
+    if (aa) {
+        /* copy the scene aside, then filter it back into the scene color */
+        pBindFramebuffer(GL_READ_FRAMEBUFFER, g_colonly_fbo);
+        pBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_tmp_fbo);
+        REAL(glReadBuffer)(GL_COLOR_ATTACHMENT0); REAL(glDrawBuffer)(GL_COLOR_ATTACHMENT0);
+        pBlitFramebuffer(0, 0, g_fbw, g_fbh, 0, 0, g_fbw, g_fbh, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        pBindFramebuffer(GL_FRAMEBUFFER, g_colonly_fbo);
+        REAL(glDrawBuffer)(GL_COLOR_ATTACHMENT0);
+        REAL(glColorMask)(1, 1, 1, 0);
+        pUseProgram(g_prog_present);
+        bind_tex(0, g_tmp_tex);
+        pUniform1i(pGetUniformLocation(g_prog_present, "uColor"), 0);
+        pUniform2f(pGetUniformLocation(g_prog_present, "uTexel"), 1.0f / g_fbw, 1.0f / g_fbh);
+        pUniform1f(pGetUniformLocation(g_prog_present, "uFxaa"), (float)cfg.fxaa);
+        pUniform1f(pGetUniformLocation(g_prog_present, "uSharpen"), cfg.sharpen);
+        quad();
+    }
     pBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
     pass_end();
     REAL(glDrawBuffer)(GL_COLOR_ATTACHMENT0);
-    if (where[0] == 'o') { if (InterlockedIncrement(&g_ao_at_ortho) == 1) lg(1, "AO: applied before the HUD (at glOrtho), near %.2f far %.0f", g_proj[2], g_proj[3]); }
+    REAL(glReadBuffer)(GL_COLOR_ATTACHMENT0);
+    if (where[0] == 'o') { if (InterlockedIncrement(&g_ao_at_ortho) == 1) lg(1, "scene effects: applied before the HUD (at glOrtho), near %.2f far %.0f", g_proj[2], g_proj[3]); }
     else if (InterlockedIncrement(&g_ao_at_present) == 1)
-        lg(1, "AO: no HUD switch seen this frame; applied at present (HUD may be shaded too)");
+        lg(1, "scene effects: no HUD switch seen this frame; applied at present (HUD may be affected too)");
 }
 
 /* ------------------------------------------------------------------ present */
@@ -362,12 +390,12 @@ static BOOL present(HDC dc)
     QueryPerformanceCounter(&a);
     if (g_fbo_ready) {
         double s, ox, oy; int cw, ch;
-        apply_ao("present");
+        apply_scene_fx("present");
         letterbox(&s, &ox, &oy, &cw, &ch);
         /* window y is bottom-up in GL */
         int x0 = (int)(ox + 0.5), x1 = (int)(ox + g_vw * s + 0.5);
         int y0 = (int)(oy + 0.5), y1 = (int)(oy + g_vh * s + 0.5);
-        int shaded = (cfg.fxaa || cfg.sharpen > 0) && shaders_ready();
+        int shaded = 0;   /* FXAA/sharpen now run on the 3D scene only (apply_scene_fx) */
         pass_begin();
         pBindFramebuffer(GL_FRAMEBUFFER, 0);
         REAL(glDrawBuffer)(GL_BACK);
@@ -431,7 +459,7 @@ void WINAPI hk_glMatrixMode(GLenum m) { g_matrix_mode = m; REAL(glMatrixMode)(m)
 
 void WINAPI hk_glLoadIdentity(void)
 {
-    if (g_matrix_mode == GL_PROJECTION && cfg.ao && g_fbo_ready) {
+    if (g_matrix_mode == GL_PROJECTION && (cfg.ao || cfg.fxaa || cfg.sharpen > 0) && g_fbo_ready) {
         GLfloat m[16];
         REAL(glGetFloatv)(GL_PROJECTION_MATRIX, m);
         /* a perspective projection has m[11] == -1 and m[15] == 0 */
@@ -447,6 +475,6 @@ void WINAPI hk_glLoadIdentity(void)
 
 void WINAPI hk_glOrtho(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f)
 {
-    if (g_persp_seen && !g_ao_done) apply_ao("ortho");
+    if (g_persp_seen && !g_ao_done) apply_scene_fx("ortho");
     REAL(glOrtho)(l, r, b, t, n, f);
 }
