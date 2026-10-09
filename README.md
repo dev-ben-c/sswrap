@@ -125,8 +125,14 @@ you rearrange the HUD in the game, that arrangement becomes the new original.
 
 ## HD textures
 
-sswrap can dump every texture the game loads and swap in replacements, so you can build an HD
-texture pack, e.g. with an AI upscaler.
+**Ready-made pack:** [sswrap-hd-textures](https://github.com/dev-ben-c/sswrap-hd-textures) has
+about 4,700 textures upscaled 4x (terrain, skies, Herc skins, buildings, effects) for the retail
+1.004 release. Extract it into the Starsiege folder and start the game. It is kept in a separate
+repository because it is derived from the game's original artwork; this repository contains no
+game assets.
+
+**Build your own:** sswrap can dump every texture the game loads and swap in replacements, so you
+can build or extend a pack yourself, e.g. with an AI upscaler.
 
 1. Set `TextureDump=1` in `sswrap.ini` and play: every texture the game loads is saved once to
    `sswrap_textures/dump/` (named `<width>x<height>_<fingerprint>.tga`). Play the maps and
