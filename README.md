@@ -13,8 +13,9 @@ SUPER, 3440x1440). It should also work on Windows, but that is untested.
   monitor never switches mode. The game renders off-screen at the size it asked for, and every
   frame is scaled onto the whole monitor with the aspect ratio kept (black bars). Mouse
   coordinates, the cursor, and window sizes are translated so the game never notices.
-- **A full resolution menu.** The game's options list 24 common sizes (4:3, 16:9, 16:10,
-  ultrawide, plus your native size), and you can add your own.
+- **A full resolution menu.** The game's options list common 4:3, 16:9, 16:10, 21:9 and 32:9
+  sizes plus your native size, and you can add your own. Tip for ultrawides: half your native size
+  (e.g. 1720x720 on 3440x1440) fills the screen and keeps the HUD readable.
 - **Fixes the multi-second freezes.** Starsiege looks up the long-dead Dynamix master and IRC
   servers on its render thread; each failed DNS lookup froze the game for ~2 s, repeatedly when
   hosting multiplayer. Those lookups now fail instantly.
