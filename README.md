@@ -79,7 +79,7 @@ costs sharpness:
 |---|---|---|---|---|
 | 1920x1080 | 1.5x | 1280x720 | Native | 1920x1080 |
 | 2560x1440 | 2x | 1280x720 | 2x | 5120x2880 |
-| 3440x1440 | 1.5x | 2293x960 | Native | 3440x1440 |
+| 3440x1440 | 1.5x | 2292x960 | Native | 3440x1440 |
 | 3440x1440 | 2x | 1720x720 | 3x | 10320x4320 |
 
 The settings window shows the resulting numbers for whatever you pick. Supersampling is
