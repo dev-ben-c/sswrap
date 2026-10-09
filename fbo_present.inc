@@ -43,6 +43,10 @@ typedef void (WINAPI *PFN_glLoadMatrixf)(const GLfloat *);
 typedef void (WINAPI *PFN_glLoadMatrixd)(const GLdouble *);
 typedef void (WINAPI *PFN_glMultMatrixf)(const GLfloat *);
 typedef void (WINAPI *PFN_glMultMatrixd)(const GLdouble *);
+typedef void (WINAPI *PFN_glDepthFunc)(GLenum);
+typedef void (WINAPI *PFN_glDepthRange)(GLclampd, GLclampd);
+typedef void (WINAPI *PFN_glDrawArrays)(GLenum, GLint, GLsizei);
+typedef void (WINAPI *PFN_glDrawElements)(GLenum, GLsizei, GLenum, const GLvoid *);
 typedef void (WINAPI *PFN_glFramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
 
 static void (WINAPI *pFramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
@@ -75,8 +79,15 @@ static int g_shaders_ok = -1;                     /* -1 not tried, 0 failed, 1 o
 static GLenum g_matrix_mode = GL_MODELVIEW;
 static int g_persp_seen, g_ao_done;
 static float g_proj[4];                           /* P[0], P[5], near, far */
-static LONG g_ao_at_ortho, g_ao_at_present;
+static LONG g_ao_at_ortho, g_ao_at_present, g_ao_at_hud;
+/* Games that project on the CPU (Starsiege/Darkstar) never set a GL perspective. There the world
+ * is drawn with depth testing on, then the HUD with it off; depth is stored as ~1/distance
+ * (reverse, GL_GEQUAL). g_world_draws counts draws made with depth testing on this frame. */
+static int g_depth_on; static LONG g_world_draws; static int g_cpu_proj;
+static LONG g_draws;
 static int g_trace;                               /* frames left to trace (diagnostics) */
+static void trace_draws(const char *what);
+static void trace_depth_sample(void);
 static LONG g_trace_lines;
 
 static int load_gl3(void)
@@ -115,12 +126,13 @@ static const char *VS =
 static const char *FS_AO =
     "#version 120\n"
     "uniform sampler2D uDepth; uniform vec2 uTexel; uniform vec4 uProj;\n"
-    "uniform float uRadius, uStrength, uMaxDist;\n"
-    "float lin(float d) { return uProj.z * uProj.w / (uProj.w - d * (uProj.w - uProj.z)); }\n"
+    "uniform float uRadius, uStrength, uMaxDist, uMode;\n"
+    "float lin(float d) { return uMode > 0.5 ? uProj.z / max(d, 1e-6) : uProj.z * uProj.w / (uProj.w - d * (uProj.w - uProj.z)); }\n"
+    "bool sky(float d) { return uMode > 0.5 ? d <= 1e-5 : d >= 0.99999; }\n"
     "vec3 pos(vec2 uv) { float z = lin(texture2D(uDepth, uv).r); return vec3((uv * 2.0 - 1.0) * z / uProj.xy, -z); }\n"
     "void main() {\n"
     "  vec2 uv = gl_TexCoord[0].xy; float d = texture2D(uDepth, uv).r;\n"
-    "  if (d >= 0.99999) { gl_FragColor = vec4(1.0); return; }\n"
+    "  if (sky(d)) { gl_FragColor = vec4(1.0); return; }\n"
     "  vec3 p = pos(uv); float z = -p.z;\n"
     "  if (z > uMaxDist) { gl_FragColor = vec4(1.0); return; }\n"
     "  vec3 n = normalize(cross(dFdx(p), dFdy(p))); if (dot(n, p) > 0.0) n = -n;\n"
@@ -140,8 +152,8 @@ static const char *FS_AO =
 /* Depth-aware 4x4 blur of the AO, output multiplied into the scene by blending. */
 static const char *FS_AOAPPLY =
     "#version 120\n"
-    "uniform sampler2D uAO; uniform sampler2D uDepth; uniform vec2 uTexel; uniform vec4 uProj;\n"
-    "float lin(float d) { return uProj.z * uProj.w / (uProj.w - d * (uProj.w - uProj.z)); }\n"
+    "uniform sampler2D uAO; uniform sampler2D uDepth; uniform vec2 uTexel; uniform vec4 uProj; uniform float uMode;\n"
+    "float lin(float d) { return uMode > 0.5 ? uProj.z / max(d, 1e-6) : uProj.z * uProj.w / (uProj.w - d * (uProj.w - uProj.z)); }\n"
     "void main() {\n"
     "  vec2 uv = gl_TexCoord[0].xy; float z0 = lin(texture2D(uDepth, uv).r);\n"
     "  float s = 0.0, w = 0.0;\n"
@@ -332,8 +344,16 @@ static int is_window_buffer(GLenum m)
 static void apply_scene_fx(const char *where)
 {
     int ao = cfg.ao, aa = cfg.fxaa || cfg.sharpen > 0;
-    if ((!ao && !aa) || !g_fbo_ready || !g_persp_seen || g_ao_done || !shaders_ready()) return;
+    if ((!ao && !aa) || !g_fbo_ready || g_ao_done || !shaders_ready()) return;
+    if (!g_persp_seen && !g_cpu_proj) return;
     g_ao_done = 1;
+    float mode = g_persp_seen ? 0.0f : 1.0f;
+    if (!g_persp_seen) {
+        /* CPU-projected: no GL projection to read, so derive it from the configured FOV and
+         * the aspect ratio; distance = DepthScale / depth */
+        float p0 = 1.0f / (float)tan(cfg.cpu_fov * 3.14159265f / 360.0f);
+        g_proj[0] = p0; g_proj[1] = p0 * g_fbw / g_fbh; g_proj[2] = cfg.depth_scale; g_proj[3] = 0;
+    }
     pass_begin();
     REAL(glViewport)(0, 0, g_fbw, g_fbh);
     if (ao) {
@@ -348,6 +368,7 @@ static void apply_scene_fx(const char *where)
         pUniform1f(pGetUniformLocation(g_prog_ao, "uRadius"), cfg.ao_radius);
         pUniform1f(pGetUniformLocation(g_prog_ao, "uStrength"), cfg.ao_strength);
         pUniform1f(pGetUniformLocation(g_prog_ao, "uMaxDist"), cfg.ao_max_dist);
+        pUniform1f(pGetUniformLocation(g_prog_ao, "uMode"), mode);
         quad();
         /* 2: blur and multiply into the scene color (target holds only the color texture) */
         pBindFramebuffer(GL_FRAMEBUFFER, g_colonly_fbo);
@@ -359,6 +380,7 @@ static void apply_scene_fx(const char *where)
         pUniform1i(pGetUniformLocation(g_prog_aoapply, "uDepth"), 1);
         pUniform2f(pGetUniformLocation(g_prog_aoapply, "uTexel"), 1.0f / g_fbw, 1.0f / g_fbh);
         pUniform4f(pGetUniformLocation(g_prog_aoapply, "uProj"), g_proj[0], g_proj[1], g_proj[2], g_proj[3]);
+        pUniform1f(pGetUniformLocation(g_prog_aoapply, "uMode"), mode);
         quad();
         REAL(glDisable)(GL_BLEND); REAL(glColorMask)(1, 1, 1, 1);
     }
@@ -383,7 +405,8 @@ static void apply_scene_fx(const char *where)
     pass_end();
     REAL(glDrawBuffer)(GL_COLOR_ATTACHMENT0);
     REAL(glReadBuffer)(GL_COLOR_ATTACHMENT0);
-    if (where[0] == 'o') { if (InterlockedIncrement(&g_ao_at_ortho) == 1) lg(1, "scene effects: applied before the HUD (at glOrtho), near %.2f far %.0f", g_proj[2], g_proj[3]); }
+    if (where[0] == 'h') { if (InterlockedIncrement(&g_ao_at_hud) == 1) lg(1, "scene effects: applied before the HUD (depth test switched off after %ld world draws; CPU-projected game, fov %.0f)", g_world_draws, cfg.cpu_fov); }
+    else if (where[0] == 'o') { if (InterlockedIncrement(&g_ao_at_ortho) == 1) lg(1, "scene effects: applied before the HUD (at glOrtho), near %.2f far %.0f", g_proj[2], g_proj[3]); }
     else if (InterlockedIncrement(&g_ao_at_present) == 1)
         lg(1, "scene effects: no HUD switch seen this frame; applied at present (HUD may be affected too)");
 }
@@ -397,6 +420,7 @@ static BOOL present(HDC dc)
     QueryPerformanceCounter(&a);
     if (g_fbo_ready) {
         double s, ox, oy; int cw, ch;
+        if (g_trace == 2) { trace_draws("SwapBuffers"); trace_depth_sample(); }
         apply_scene_fx("present");
         letterbox(&s, &ox, &oy, &cw, &ch);
         /* window y is bottom-up in GL */
@@ -431,7 +455,7 @@ static BOOL present(HDC dc)
     } else {
         r = REAL(wglSwapBuffers)(dc);
     }
-    g_persp_seen = 0; g_ao_done = 0;
+    g_persp_seen = 0; g_ao_done = 0; g_world_draws = 0;
     {
         static int last_w, countdown;
         if (g_vactive && g_vw != last_w) { last_w = g_vw; countdown = (g_vw != 640) ? 300 : 0; }
@@ -517,3 +541,58 @@ void WINAPI hk_glLoadMatrixf(const GLfloat *m) { REAL(glLoadMatrixf)(m); classif
 void WINAPI hk_glLoadMatrixd(const GLdouble *m) { REAL(glLoadMatrixd)(m); classify_projection("glLoadMatrixd"); }
 void WINAPI hk_glMultMatrixf(const GLfloat *m) { REAL(glMultMatrixf)(m); classify_projection("glMultMatrixf"); }
 void WINAPI hk_glMultMatrixd(const GLdouble *m) { REAL(glMultMatrixd)(m); classify_projection("glMultMatrixd"); }
+
+/* ---- depth-state tracing (diagnostics). Counts draw calls between changes so the trace shows
+ * the structure of a frame: sky, world, effects, HUD. */
+static void trace_draws(const char *what)
+{
+    if (g_trace && g_draws) { TRACE("   ... %ld draw calls", g_draws); }
+    g_draws = 0;
+    TRACE("%s", what);
+}
+void WINAPI hk_glEnable(GLenum c)
+{
+    if (c == GL_DEPTH_TEST) g_depth_on = 1;
+    if (g_trace && (c == GL_DEPTH_TEST || c == GL_BLEND || c == GL_ALPHA_TEST || c == GL_FOG))
+        trace_draws(c == GL_DEPTH_TEST ? "glEnable(DEPTH_TEST)" : c == GL_BLEND ? "glEnable(BLEND)" : c == GL_FOG ? "glEnable(FOG)" : "glEnable(ALPHA_TEST)");
+    REAL(glEnable)(c);
+}
+void WINAPI hk_glDisable(GLenum c)
+{
+    if (c == GL_DEPTH_TEST) {
+        g_depth_on = 0;
+        if (!g_ao_done && g_world_draws >= cfg.min_world_draws && g_fbo_ready) { g_cpu_proj = 1; apply_scene_fx("hud"); }
+    }
+    if (g_trace && (c == GL_DEPTH_TEST || c == GL_BLEND || c == GL_ALPHA_TEST || c == GL_FOG))
+        trace_draws(c == GL_DEPTH_TEST ? "glDisable(DEPTH_TEST)" : c == GL_BLEND ? "glDisable(BLEND)" : c == GL_FOG ? "glDisable(FOG)" : "glDisable(ALPHA_TEST)");
+    REAL(glDisable)(c);
+}
+void WINAPI hk_glDepthMask(GLboolean f) { if (g_trace) trace_draws(f ? "glDepthMask(TRUE)" : "glDepthMask(FALSE)"); REAL(glDepthMask)(f); }
+void WINAPI hk_glDepthFunc(GLenum f) { if (g_trace) { char b[48]; snprintf(b, sizeof b, "glDepthFunc(0x%x)", f); trace_draws(b); } REAL(glDepthFunc)(f); }
+void WINAPI hk_glDepthRange(GLclampd n, GLclampd f) { if (g_trace) { char b[64]; snprintf(b, sizeof b, "glDepthRange(%.3f, %.3f)", n, f); trace_draws(b); } REAL(glDepthRange)(n, f); }
+void WINAPI hk_glBegin(GLenum m) { g_draws++; if (g_depth_on) g_world_draws++; REAL(glBegin)(m); }
+void WINAPI hk_glDrawArrays(GLenum m, GLint f, GLsizei n) { g_draws++; if (g_depth_on) g_world_draws++; REAL(glDrawArrays)(m, f, n); }
+void WINAPI hk_glDrawElements(GLenum m, GLsizei n, GLenum t, const GLvoid *i) { g_draws++; if (g_depth_on) g_world_draws++; REAL(glDrawElements)(m, n, t, i); }
+
+/* sample the depth buffer on a grid at the end of a traced frame: shows how the game encodes depth */
+static void trace_depth_sample(void)
+{
+    if (!g_fbo_ready) return;
+    float d[9 * 9], mn = 2, mx = -1; int ones = 0, zeros = 0;
+    char line[512]; int n = 0;
+    for (int j = 0; j < 9; j++) for (int i = 0; i < 9; i++) {
+        float v = 0;
+        REAL(glReadPixels)((i + 1) * g_fbw / 10, (j + 1) * g_fbh / 10, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &v);
+        d[j * 9 + i] = v;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+        if (v >= 0.99999f) ones++;
+        if (v <= 0.00001f) zeros++;
+    }
+    lg(0, "trace: depth sample 9x9: min %.6f max %.6f, %d at 1.0 (clear), %d at 0.0", mn, mx, ones, zeros);
+    for (int j = 8; j >= 0; j--) {
+        n = snprintf(line, sizeof line, "trace: depth row %d:", j);
+        for (int i = 0; i < 9; i++) n += snprintf(line + n, sizeof line - n, " %.5f", d[j * 9 + i]);
+        lg(0, "%s", line);
+    }
+}

@@ -23,6 +23,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include "gl_names.h"
 
 /* GL 3.0 framebuffer bits (not in the 1.1 headers) */
@@ -46,7 +47,9 @@ static struct {
     int ao, fxaa;
     float ao_radius, ao_strength, ao_max_dist, sharpen;
     char extra_modes[512];
-} cfg = { 1, 1, 1, 200, 1, 10, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "" };
+    float cpu_fov, depth_scale;
+    int min_world_draws;
+} cfg = { 1, 1, 1, 200, 1, 10, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50 };
 
 static int g_vactive, g_vw, g_vh;       /* virtual (game-requested) display mode */
 static int g_rw, g_rh;                  /* real primary monitor size */
@@ -784,6 +787,9 @@ static void read_config(void)
     cfg.ao_max_dist = ini_float(ini, "AOMaxDistance", cfg.ao_max_dist);
     cfg.sharpen = ini_float(ini, "Sharpen", cfg.sharpen);
     GetPrivateProfileStringA("sswrap", "ExtraModes", "", cfg.extra_modes, sizeof cfg.extra_modes, ini);
+    cfg.cpu_fov = ini_float(ini, "FOV", cfg.cpu_fov);
+    cfg.depth_scale = ini_float(ini, "DepthScale", cfg.depth_scale);
+    cfg.min_world_draws = GetPrivateProfileIntA("sswrap", "MinWorldDraws", cfg.min_world_draws, ini);
 }
 
 static void open_log(void)

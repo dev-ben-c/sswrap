@@ -18,6 +18,9 @@ HOOKED = {
     # post-processing: detect the 3D -> 2D HUD switch and capture the 3D projection
     "glMatrixMode": 4, "glLoadIdentity": 0, "glOrtho": 48,
     "glFrustum": 48, "glLoadMatrixf": 4, "glLoadMatrixd": 4, "glMultMatrixf": 4, "glMultMatrixd": 4,
+    # diagnostics for games that project on the CPU (no GL 3D camera): depth-state changes
+    "glEnable": 4, "glDisable": 4, "glDepthMask": 4, "glDepthFunc": 4, "glDepthRange": 16, "glBegin": 4,
+    "glDrawArrays": 12, "glDrawElements": 16,
 }
 missing = set(HOOKED) - set(names)
 assert not missing, missing
