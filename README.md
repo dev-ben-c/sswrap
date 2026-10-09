@@ -21,6 +21,13 @@ SUPER, 3440x1440). It should also work on Windows, but that is untested.
   hosting multiplayer. Those lookups now fail instantly.
 - **Visual effects** (each switchable), applied to the 3D world only, *before* the HUD is drawn, so
   menus, HUD and text stay crisp: screen-space ambient occlusion, FXAA, and sharpening.
+- **A real HUD scale.** Found with Ghidra: Starsiege draws its HUD with C++ GUI controls, so
+  sswrap hooks each HUD element's render call in memory and enlarges it around its screen
+  corner or edge, at full native resolution (retail 1.004 only; checked before patching).
+- **Sharper HUD and menu art.** The HUD/menu bitmaps the game assembles at runtime are enlarged
+  2x or 4x with a pixel-art filter (Scale2x) on their way to the GPU.
+- **Proper supersampling.** At render quality above native, every screen pixel averages all the
+  pixels rendered under it, so thin lines and small text stay clean.
 - **HD texture packs.** Dump every texture the game loads, upscale them (a Real-ESRGAN script
   is included), and sswrap swaps the HD versions in.
 - **Debugging built in.** `sswrap.log` records display/window/context events, fps summaries, and
@@ -93,6 +100,16 @@ look to the far corners. Heights and centred elements (reticle, compass) are unc
 original layout is kept as `hudLayout.prf.sswrap-orig`; unticking the option restores it, and if
 you rearrange the HUD in the game, that arrangement becomes the new original.
 
+**HUD meter scale (retail 1.004).** Separately from HUD size, the settings window's *HUD meter
+scale* enlarges the HUD meters themselves (radar, shields, weapons, reticle, target, timer, text)
+by up to 2x while the game runs at your native resolution. sswrap found the HUD's GUI classes in the
+game with Ghidra and wraps each one's render call, scaling it around a shared screen anchor (the
+corner, edge centre or screen centre of its region), so neighbouring elements stay aligned.
+Buttons and dialogs are left alone so clicks still land where they are drawn. It only activates if
+the game's code is exactly version 1.004. Pair it with `UiUpscale=4`: many HUD panels are painted
+by the game in software at their original resolution, text included, and the pixel-art filter
+smooths them before they are enlarged.
+
 **Known limits.**
 - HUD sizes are steps of the game resolution, so text and lines are drawn at the game's pixel size
   and scaled up: they stay clean (they are drawn at the render quality's resolution) but are not
@@ -111,6 +128,8 @@ you rearrange the HUD in the game, that arrangement becomes the new original.
 | `RenderScale` | 1 | Render at this multiple of the game's resolution, fractions allowed (set by the settings window) |
 | `AskOnLaunch` | 1 | Show the settings window at startup |
 | `UltrawideHud` | 0 | Keep the HUD within a centred 16:9 area (set by the settings window) |
+| `HudScale` | 1 | Enlarge the HUD meters 1.25x-2x at any game resolution (retail 1.004; set by the settings window) |
+| `UiUpscale` | 1 | Enlarge HUD/menu/font bitmaps 2x or 4x with Scale2x, or with `sub_*.png` HD replacements |
 | `LinearFilter` | 1 | Smooth (1) or sharp pixel (0) scaling |
 | `AO`, `AORadius`, `AOStrength`, `AOMaxDistance` | 1, 3.0, 1.5, 400 | Ambient occlusion and its reach, darkness, fade distance |
 | `FXAA` | 1 | Edge smoothing |

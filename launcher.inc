@@ -14,6 +14,7 @@
 #define ID_KEEP    108
 #define ID_HUD     109
 #define ID_UWHUD   110
+#define ID_HSCALE  111
 static void apply_hud_layout(int ultrawide, int gw, int gh);
 
 static struct { int w, h; char label[96]; } g_res_items[80];
@@ -155,7 +156,7 @@ static void show_launcher(void)
     wc.lpfnWndProc = launcher_proc; wc.hInstance = g_self; wc.lpszClassName = "sswrapLauncher";
     wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     RegisterClassA(&wc);
-    int W = 580, H = 376;
+    int W = 580, H = 412;
     g_dlg = CreateWindowExA(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, "sswrapLauncher", "Starsiege - display settings (sswrap)",
                             WS_POPUP | WS_CAPTION | WS_SYSMENU, (r_GetSystemMetrics(SM_CXSCREEN) - W) / 2,
                             (r_GetSystemMetrics(SM_CYSCREEN) - H) / 2, W, H, NULL, NULL, g_self, NULL);
@@ -195,16 +196,26 @@ static void show_launcher(void)
     SendMessageA(res, CB_SETCURSEL, 0, 0);
 
     ctl("STATIC", "", 0, 150, 144, 406, 34, ID_HINT);
-    HWND ao = ctl("BUTTON", "Ambient occlusion (soft contact shadows)", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 184, 406, 20, ID_AO);
-    HWND aa = ctl("BUTTON", "Edge smoothing and sharpening (FXAA)", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 208, 406, 20, ID_AA);
-    HWND uw = ctl("BUTTON", "Ultrawide HUD: keep the HUD within a 16:9 area in the centre", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 232, 406, 20, ID_UWHUD);
-    HWND ask = ctl("BUTTON", "Show this window every time the game starts", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 264, 406, 20, ID_ASK);
+    ctl("STATIC", "HUD meter scale:", 0, 16, 186, 130, 18, 0);
+    HWND hs = ctl("COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP, 150, 182, 406, 200, ID_HSCALE);
+    static const float hscales[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };
+    int hsel2 = 0;
+    for (int i = 0; i < 5; i++) {
+        snprintf(t, sizeof t, i == 0 ? "Off (game's size)" : "%.2gx  - radar, weapons, shields, reticle... grow from their corner", hscales[i]);
+        SendMessageA(hs, CB_ADDSTRING, 0, (LPARAM)t);
+        if (cfg.hud_scale > hscales[i] - 0.01f) hsel2 = i;
+    }
+    SendMessageA(hs, CB_SETCURSEL, hsel2, 0);
+    HWND ao = ctl("BUTTON", "Ambient occlusion (soft contact shadows)", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 220, 406, 20, ID_AO);
+    HWND aa = ctl("BUTTON", "Edge smoothing and sharpening (FXAA)", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 244, 406, 20, ID_AA);
+    HWND uw = ctl("BUTTON", "Ultrawide HUD: keep the HUD within a 16:9 area in the centre", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 268, 406, 20, ID_UWHUD);
+    HWND ask = ctl("BUTTON", "Show this window every time the game starts", BS_AUTOCHECKBOX | WS_TABSTOP, 150, 300, 406, 20, ID_ASK);
     SendMessageA(ao, BM_SETCHECK, cfg.ao ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageA(aa, BM_SETCHECK, (cfg.fxaa || cfg.sharpen > 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageA(ask, BM_SETCHECK, BST_CHECKED, 0);
     SendMessageA(uw, BM_SETCHECK, cfg.ultrawide_hud ? BST_CHECKED : BST_UNCHECKED, 0);
-    ctl("BUTTON", "Start game", BS_DEFPUSHBUTTON | WS_TABSTOP, 320, 300, 116, 30, ID_START);
-    ctl("BUTTON", "Keep current", WS_TABSTOP, 440, 300, 116, 30, ID_KEEP);
+    ctl("BUTTON", "Start game", BS_DEFPUSHBUTTON | WS_TABSTOP, 320, 336, 116, 30, ID_START);
+    ctl("BUTTON", "Keep current", WS_TABSTOP, 440, 336, 116, 30, ID_KEEP);
     update_hint();
 
     ShowWindow(g_dlg, SW_SHOW); SetForegroundWindow(g_dlg); SetFocus(hud);
@@ -214,6 +225,7 @@ static void show_launcher(void)
         if (!IsDialogMessageA(dlg, &msg)) { TranslateMessage(&msg); DispatchMessageA(&msg); }
     }
     if (g_launcher_result != ID_START) lg(1, "launcher: kept current settings");
+    hud_install();
 }
 
 /* Save the choices (called on "Start game", while the controls still exist). */
@@ -225,8 +237,12 @@ static void launcher_capture_and_apply(HWND h)
     int aa = SendDlgItemMessageA(h, ID_AA, BM_GETCHECK, 0, 0) == BST_CHECKED;
     int ask = SendDlgItemMessageA(h, ID_ASK, BM_GETCHECK, 0, 0) == BST_CHECKED;
     int uw = SendDlgItemMessageA(h, ID_UWHUD, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    static const float hscales[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };
+    int hsi = (int)SendDlgItemMessageA(h, ID_HSCALE, CB_GETCURSEL, 0, 0);
+    float hsv = hscales[hsi < 0 ? 0 : hsi];
     write_game_res(gw, gh);
     cfg.ultrawide_hud = uw; ini_set("UltrawideHud", uw ? "1" : "0");
+    cfg.hud_scale = hsv; snprintf(v, sizeof v, "%.4g", hsv); ini_set("HudScale", v);
     apply_hud_layout(uw, gw, gh);
     add_mode(gw, gh);                                   /* so the game's own menu can show it too */
     cfg.render_scale = sc; snprintf(v, sizeof v, "%.4g", sc); ini_set("RenderScale", v);

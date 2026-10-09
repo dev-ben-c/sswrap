@@ -52,7 +52,9 @@ static struct {
     int min_world_draws;
     int tex_dump, tex_replace;
     int ask_on_launch, ultrawide_hud;
-} cfg = { 1, 1, 200, 1, 10, 1.0f, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50, 0, 1, 1, 0 };
+    float hud_scale;
+    int ui_upscale;
+} cfg = { 1, 1, 200, 1, 10, 1.0f, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50, 0, 1, 1, 0, 1.0f, 1 };
 
 static int g_vactive, g_vw, g_vh;       /* virtual (game-requested) display mode */
 static int g_rw, g_rh;                  /* real primary monitor size */
@@ -477,6 +479,7 @@ static void *WINAPI hk_gethostbyname(const char *name)
     return r;
 }
 
+#include "hudscale.inc"
 #include "fbo_present.inc"
 #include "textures.inc"
 #include "launcher.inc"
@@ -553,6 +556,7 @@ void WINAPI hk_glViewport(GLint x, GLint y, GLsizei w, GLsizei h)
 
 void WINAPI hk_glScissor(GLint x, GLint y, GLsizei w, GLsizei h)
 {
+    hud_scissor(&x, &y, &w, &h);
     REAL(glScissor)(SC(x), SC(y), SC(x + w) - SC(x), SC(y + h) - SC(y));
 }
 
@@ -564,7 +568,7 @@ void WINAPI hk_glGetIntegerv(GLenum p, GLint *v)
     if ((p == GL_DRAW_BUFFER || p == GL_READ_BUFFER) && g_fbo_ready && v[0] == GL_COLOR_ATTACHMENT0) v[0] = GL_BACK;
 }
 
-void WINAPI hk_glLineWidth(GLfloat w) { REAL(glLineWidth)(w * g_scale); }
+void WINAPI hk_glLineWidth(GLfloat w) { REAL(glLineWidth)(w * g_scale * (g_hud_active ? cfg.hud_scale : 1.0f)); }
 void WINAPI hk_glPointSize(GLfloat s) { REAL(glPointSize)(s * g_scale); }
 
 /* pixel-exact operations: logged so we learn whether the game uses them, scaled where possible */
@@ -810,6 +814,9 @@ static void read_config(void)
     cfg.tex_replace = GetPrivateProfileIntA("sswrap", "TextureReplace", cfg.tex_replace, ini);
     cfg.ask_on_launch = GetPrivateProfileIntA("sswrap", "AskOnLaunch", cfg.ask_on_launch, ini);
     cfg.ultrawide_hud = GetPrivateProfileIntA("sswrap", "UltrawideHud", cfg.ultrawide_hud, ini);
+    cfg.hud_scale = ini_float(ini, "HudScale", cfg.hud_scale);
+    cfg.ui_upscale = GetPrivateProfileIntA("sswrap", "UiUpscale", cfg.ui_upscale, ini);
+    if (cfg.hud_scale < 0.5f || cfg.hud_scale > 4.0f) cfg.hud_scale = 1.0f;
 }
 
 static void open_log(void)
@@ -853,5 +860,6 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID res)
     build_mode_list();
     tex_init();
     hook_exe();
+    if (!cfg.ask_on_launch) hud_install();   /* otherwise installed after the startup window */
     return TRUE;
 }

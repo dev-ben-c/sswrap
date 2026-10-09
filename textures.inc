@@ -123,7 +123,8 @@ static void tex_init(void)
         if ((h = FindFirstFileA(pat, &fd)) != INVALID_HANDLE_VALUE) {
             do {
                 unsigned long long v; int w, hh;
-                if (sscanf(fd.cFileName, "%dx%d_%16llx", &w, &hh, &v) == 3) {
+                if (sscanf(fd.cFileName, "%dx%d_%16llx", &w, &hh, &v) == 3 ||
+                    sscanf(fd.cFileName, "sub_%dx%d_%16llx", &w, &hh, &v) == 3) {
                     if (g_ndumped == g_cap_dumped) { g_cap_dumped = g_cap_dumped ? g_cap_dumped * 2 : 1024; g_dumped = realloc(g_dumped, g_cap_dumped * sizeof *g_dumped); }
                     g_dumped[g_ndumped++] = v;
                 }
@@ -172,8 +173,18 @@ static void unmark_replaced(GLuint id)
 
 static GLuint bound_tex(void) { GLint id = 0; REAL(glGetIntegerv)(GL_TEXTURE_BINDING_2D, &id); return (GLuint)id; }
 
+#include "uiupscale.inc"
+
 void WINAPI hk_glTexImage2D(GLenum tg, GLint lv, GLint ifmt, GLsizei w, GLsizei h, GLint bd, GLenum fmt, GLenum type, const GLvoid *px)
 {
+    if (tg == GL_TEXTURE_2D && g_npages) {
+        /* the game re-creating a page we enlarged: it starts over at its own size */
+        GLuint pid = bound_tex();
+        if (ui_page_find(pid)) {
+            if (lv > 0) return;                 /* enlarged pages use generated mipmaps */
+            ui_page_forget(pid);
+        }
+    }
     if (tg != GL_TEXTURE_2D || (!cfg.tex_dump && !g_nload)) { REAL(glTexImage2D)(tg, lv, ifmt, w, h, bd, fmt, type, px); return; }
     GLuint id = bound_tex();
     if (lv > 0) {
@@ -226,13 +237,15 @@ void WINAPI hk_glTexSubImage2D(GLenum tg, GLint lv, GLint x, GLint y, GLsizei w,
         LG_FIRST(5, 1, "textures: ignoring a %dx%d sub-image update to a replaced texture", w, h);
         return;
     }
+    if (ui_sub_image(tg, lv, x, y, w, h, fmt, type, px)) return;
     REAL(glTexSubImage2D)(tg, lv, x, y, w, h, fmt, type, px);
 }
 
 void WINAPI hk_glDeleteTextures(GLsizei n, const GLuint *ids)
 {
     for (int i = 0; i < n && g_nreplaced; i++) unmark_replaced(ids[i]);
+    for (int i = 0; i < n && g_npages; i++) ui_page_forget(ids[i]);
     REAL(glDeleteTextures)(n, ids);
 }
 
-static void tex_forget(void) { g_nreplaced = 0; }   /* on GL context change */
+static void tex_forget(void) { g_nreplaced = 0; ui_forget_all(); }   /* on GL context change */

@@ -35,7 +35,6 @@ typedef void (WINAPI *PFN_glVertex2f)(GLfloat, GLfloat);
 typedef void (WINAPI *PFN_glTexCoord2f)(GLfloat, GLfloat);
 typedef void (WINAPI *PFN_glPushClientAttrib)(GLbitfield);
 typedef void (WINAPI *PFN_glPopClientAttrib)(void);
-typedef void (WINAPI *PFN_glMatrixMode)(GLenum);
 typedef void (WINAPI *PFN_glLoadIdentity)(void);
 typedef void (WINAPI *PFN_glOrtho)(GLdouble, GLdouble, GLdouble, GLdouble, GLdouble, GLdouble);
 typedef void (WINAPI *PFN_glFrustum)(GLdouble, GLdouble, GLdouble, GLdouble, GLdouble, GLdouble);
@@ -72,7 +71,7 @@ static GLuint g_color_tex, g_depth_tex;           /* game's render targets */
 static GLuint g_colonly_fbo;                      /* color texture only (AO multiply target) */
 static GLuint g_ao_tex, g_ao_fbo;                 /* raw AO */
 static GLuint g_tmp_tex, g_tmp_fbo;               /* copy of the scene for FXAA/sharpen */
-static GLuint g_prog_ao, g_prog_aoapply, g_prog_present;
+static GLuint g_prog_ao, g_prog_aoapply, g_prog_present, g_prog_down;
 static int g_shaders_ok = -1;                     /* -1 not tried, 0 failed, 1 ok */
 
 /* per-frame projection tracking (for AO) */
@@ -200,6 +199,23 @@ static const char *FS_PRESENT =
     "  gl_FragColor = vec4(c, 1.0);\n"
     "}\n";
 
+/* Downsample for RenderScale > 1: each screen pixel averages every rendered pixel under it
+ * (box filter over its footprint, sampled on a regular grid). A single bilinear tap, as a
+ * plain blit does, reads only 2x2 of e.g. 3x3 rendered pixels and drops thin lines and text. */
+static const char *FS_DOWN =
+    "#version 120\n"
+    "uniform sampler2D uColor; uniform vec2 uTexel; uniform vec2 uRatio; uniform int uTaps;\n"
+    "void main() {\n"
+    "  vec2 uv = gl_TexCoord[0].xy;\n"
+    "  vec2 foot = uRatio * uTexel;\n"
+    "  vec3 c = vec3(0.0); float n = 0.0;\n"
+    "  for (int j = 0; j < 8; j++) { if (j >= uTaps) break;\n"
+    "    for (int i = 0; i < 8; i++) { if (i >= uTaps) break;\n"
+    "      vec2 o = (vec2(i, j) + 0.5) / float(uTaps) - 0.5;\n"
+    "      c += texture2D(uColor, uv + o * foot).rgb; n += 1.0; } }\n"
+    "  gl_FragColor = vec4(c / n, 1.0);\n"
+    "}\n";
+
 static GLuint compile(GLenum type, const char *src, const char *name)
 {
     GLuint sh = pCreateShader(type); GLint ok = 0; char log[1024];
@@ -223,7 +239,8 @@ static int shaders_ready(void)
 {
     if (g_shaders_ok >= 0) return g_shaders_ok;
     g_prog_ao = link(FS_AO, "ao"); g_prog_aoapply = link(FS_AOAPPLY, "ao-apply"); g_prog_present = link(FS_PRESENT, "present");
-    g_shaders_ok = g_prog_ao && g_prog_aoapply && g_prog_present;
+    g_prog_down = link(FS_DOWN, "downsample");
+    g_shaders_ok = g_prog_ao && g_prog_aoapply && g_prog_present && g_prog_down;
     lg(1, "post-processing shaders %s", g_shaders_ok ? "ready" : "FAILED: falling back to a plain blit");
     return g_shaders_ok;
 }
@@ -294,7 +311,7 @@ static void forget_gl_resources(const char *why)
     g_fbo = g_colonly_fbo = g_ao_fbo = g_color_tex = g_depth_tex = g_ao_tex = 0;
     g_tmp_fbo = g_tmp_tex = 0;
     g_fbo_ready = 0; g_scale = 1;
-    g_prog_ao = g_prog_aoapply = g_prog_present = 0;
+    g_prog_ao = g_prog_aoapply = g_prog_present = g_prog_down = 0;
     g_shaders_ok = -1;
     pBindFramebuffer = NULL;            /* re-fetch entry points for the new context */
     g_persp_seen = g_ao_done = 0;
@@ -436,12 +453,25 @@ static BOOL present(HDC dc)
         int x0 = (int)(ox + 0.5), x1 = (int)(ox + g_vw * s + 0.5);
         int y0 = (int)(oy + 0.5), y1 = (int)(oy + g_vh * s + 0.5);
         int shaded = 0;   /* FXAA/sharpen now run on the 3D scene only (apply_scene_fx) */
+        float rx = (float)g_fbw / (x1 - x0 > 0 ? x1 - x0 : 1), ry = (float)g_fbh / (y1 - y0 > 0 ? y1 - y0 : 1);
+        int down = (rx > 1.05f || ry > 1.05f) && cfg.filter_linear && shaders_ready();
         pass_begin();
         pBindFramebuffer(GL_FRAMEBUFFER, 0);
         REAL(glDrawBuffer)(GL_BACK);
         REAL(glClearColor)(0, 0, 0, 1);
         REAL(glClear)(GL_COLOR_BUFFER_BIT);
-        if (shaded) {
+        if (down) {
+            int taps = (int)(rx > ry ? rx : ry) + 1; if (taps > 8) taps = 8;
+            REAL(glViewport)(x0, ch - y1, x1 - x0, y1 - y0);
+            pUseProgram(g_prog_down);
+            bind_tex(0, g_color_tex);
+            pUniform1i(pGetUniformLocation(g_prog_down, "uColor"), 0);
+            pUniform2f(pGetUniformLocation(g_prog_down, "uTexel"), 1.0f / g_fbw, 1.0f / g_fbh);
+            pUniform2f(pGetUniformLocation(g_prog_down, "uRatio"), rx, ry);
+            pUniform1i(pGetUniformLocation(g_prog_down, "uTaps"), taps);
+            quad();
+            LG_FIRST(1, 1, "present: downsampling %dx%d -> %dx%d with a %dx%d box filter", g_fbw, g_fbh, x1 - x0, y1 - y0, taps, taps);
+        } else if (shaded) {
             REAL(glViewport)(x0, ch - y1, x1 - x0, y1 - y0);
             pUseProgram(g_prog_present);
             bind_tex(0, g_color_tex);
@@ -532,6 +562,8 @@ void WINAPI hk_glLoadIdentity(void)
     /* the old projection may be the 3D one about to be replaced: capture it first */
     if (g_matrix_mode == GL_PROJECTION) classify_projection("before glLoadIdentity");
     REAL(glLoadIdentity)();
+    /* an element being drawn at HUD scale keeps its scaling even if the game resets the matrix */
+    if (g_hud_active && g_matrix_mode == GL_MODELVIEW) hud_apply_matrix();
 }
 
 void WINAPI hk_glOrtho(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f)
