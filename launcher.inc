@@ -95,6 +95,7 @@ static const int g_quals[] = { 1, 2, 3 };
 static int g_hud_ok;
 #define ID_UIUP 112
 #define ID_TEXT 113
+#define ID_FOV 114
 
 static void hud_res(float k, int *w, int *h) { *w = ((int)(g_rw / k + 0.5f)) & ~1; *h = ((int)(g_rh / k + 0.5f)) & ~1; }
 static int sel(HWND d, int id) { int i = (int)SendDlgItemMessageA(d, id, CB_GETCURSEL, 0, 0); return i < 0 ? 0 : i; }
@@ -230,6 +231,8 @@ static void show_launcher(void)
     if (!text_supported()) { EnableWindow(tx, FALSE); SendMessageA(tx, BM_SETCHECK, BST_UNCHECKED, 0); }
     check("Ambient occlusion (soft contact shadows)", y, ID_AO, cfg.ao); y += 24;
     check("Edge smoothing and sharpening (FXAA)", y, ID_AA, cfg.fxaa || cfg.sharpen > 0); y += 24;
+    HWND fv = check("Widescreen field of view (see more at the sides instead of a cropped 4:3 view)", y, ID_FOV, cfg.wide_fov); y += 24;
+    EnableWindow(fv, (float)g_rw / g_rh > 1.4f && g_fov_ok);
     HWND uw = check("Ultrawide HUD: keep the HUD within a 16:9 area in the centre", y, ID_UWHUD, cfg.ultrawide_hud); y += 24;
     EnableWindow(uw, (float)g_rw / g_rh > 1.85f);
     check("Show this window every time the game starts", y, ID_ASK, 1); y += 32;
@@ -264,6 +267,9 @@ static void launcher_capture_and_apply(HWND h)
     cfg.hud_scale = hs; snprintf(v, sizeof v, "%.4g", hs); ini_set("HudScale", v);
     cfg.ui_upscale = ui ? 4 : 1; ini_set("UiUpscale", ui ? "4" : "1");
     cfg.text_hd = tx; ini_set("TextHD", tx ? "1" : "0");
+    if (IsWindowEnabled(GetDlgItem(h, ID_FOV))) {
+        cfg.wide_fov = checked(h, ID_FOV); ini_set("WidescreenFOV", cfg.wide_fov ? "1" : "0");
+    }
     cfg.ao = ao; ini_set("AO", ao ? "1" : "0");
     cfg.fxaa = aa; ini_set("FXAA", aa ? "1" : "0");
     if (aa && cfg.sharpen <= 0) cfg.sharpen = 0.4f;
@@ -272,8 +278,8 @@ static void launcher_capture_and_apply(HWND h)
     cfg.ultrawide_hud = uw; ini_set("UltrawideHud", uw ? "1" : "0");
     apply_hud_layout(uw, gw, gh);
     cfg.ask_on_launch = ask; ini_set("AskOnLaunch", ask ? "1" : "0");
-    lg(1, "launcher: game %dx%d, RenderScale %.2f, HudScale %.2f, UiUpscale %d, TextHD %d, AO %d, FXAA %d, ultrawide HUD %d, ask next time %d",
-       gw, gh, sc, hs, cfg.ui_upscale, tx, ao, aa, uw, ask);
+    lg(1, "launcher: game %dx%d, RenderScale %.2f, HudScale %.2f, UiUpscale %d, TextHD %d, widescreen FOV %d, AO %d, FXAA %d, ultrawide HUD %d, ask next time %d",
+       gw, gh, sc, hs, cfg.ui_upscale, tx, cfg.wide_fov, ao, aa, uw, ask);
 }
 
 /* ---- ultrawide HUD layout

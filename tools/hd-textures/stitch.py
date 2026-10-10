@@ -83,8 +83,16 @@ def pictures(dump):
                 r = layout(whole[a:len(whole) - b], w, h)
                 if r and r[0] <= 2.5 and (best is None or r[0] < best[0]): best = r
             if best: break
-        if best:
-            found.append((False, best[1], best[2], best[3], w, h))
+        # Only full 640x480 screens (the splash and menu backgrounds): the engine cuts them into
+        # 3 x 2 equal pieces, 213/213/214 x 240/240. Measured boundaries are not trusted (a dark
+        # band can look like a join), and other "pictures" in dump order are usually live pages.
+        if best and len(best[3]) == 6 and max(c for _, (c, r) in best[3]) == 2:
+            t = {xy: load(os.path.join(dump, f))[..., :3] for f, xy in best[3]}
+            inner = np.mean([max(np.abs(np.diff(im[:240, :213], axis=1)).mean(), 0.5) for im in t.values()])
+            joins = [np.abs(t[(x, y)][:240, 212] - t[(x + 1, y)][:240, 0]).mean() for y in range(2) for x in range(2)]
+            joins += [np.abs(t[(x, 0)][239, :213] - t[(x, 1)][0, :213]).mean() for x in range(3)]
+            if np.mean(joins) / inner <= 3.0:     # real screens score 0.2-1.5, mixed-up tiles 10+
+                found.append((False, [213, 213, 214], [240, 240], best[3], w, h))
     return found
 
 def layout(run, w, h):

@@ -55,9 +55,10 @@ static struct {
     float hud_scale;
     int ui_upscale;
     char masters[512];
-    int text_trace, text_hd;
+    int text_trace, text_hd, wide_fov;
 } cfg = { 1, 1, 200, 1, 10, 1.0f, "dynamix.com", 1, 1, 3.0f, 1.5f, 400.0f, 0.4f, "", 90.0f, 1.0f, 50, 0, 1, 1, 0, 1.0f, 1,
-          "master1.starsiegeplayers.com,master2.starsiegeplayers.com", 0, 1 };
+          "master1.starsiegeplayers.com,master2.starsiegeplayers.com", 0, 1, 1 };
+static float g_fov_k = 1.0f;            /* widescreen FOV: how much wider than 4:3 the 3D view is (fov.inc) */
 
 static int g_vactive, g_vw, g_vh;       /* virtual (game-requested) display mode */
 static int g_rw, g_rh;                  /* real primary monitor size */
@@ -546,6 +547,7 @@ static void *WINAPI hk_gethostbyname(const char *name)
 #include "fbo_present.inc"
 #include "textures.inc"
 #include "texthd.inc"
+#include "fov.inc"
 #include "launcher.inc"
 
 /* ------------------------------------------------------------------ exported GL hooks */
@@ -867,6 +869,7 @@ static void read_config(void)
     GetPrivateProfileStringA("sswrap", "Masters", cfg.masters, cfg.masters, sizeof cfg.masters, ini);
     cfg.text_trace = GetPrivateProfileIntA("sswrap", "TextTrace", cfg.text_trace, ini);
     cfg.text_hd = GetPrivateProfileIntA("sswrap", "TextHD", cfg.text_hd, ini);
+    cfg.wide_fov = GetPrivateProfileIntA("sswrap", "WidescreenFOV", cfg.wide_fov, ini);
     cfg.ao = GetPrivateProfileIntA("sswrap", "AO", cfg.ao, ini);
     cfg.fxaa = GetPrivateProfileIntA("sswrap", "FXAA", cfg.fxaa, ini);
     cfg.ao_radius = ini_float(ini, "AORadius", cfg.ao_radius);
@@ -928,6 +931,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID res)
     tex_init();
     hook_exe();
     text_install();
+    fov_install();
     if (!cfg.ask_on_launch) hud_install();   /* otherwise installed after the startup window */
     return TRUE;
 }

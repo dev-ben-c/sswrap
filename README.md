@@ -80,6 +80,7 @@ way. In the game's video options, set the 3D hardware type to "Other" (OpenGL).
 | HUD scale | Enlarges the HUD meters (radar, shields, weapons, reticle, target, timer, chat) 1.25x-2x |
 | Render quality | The 3D world renders at your monitor's resolution (Native) or 2x/3x above it and is averaged down (supersampling) |
 | Sharper HUD and menu art | Runs the HUD, menu and font bitmaps through a 4x pixel-art filter (or HD replacements) before they are enlarged (`UiUpscale=4`) |
+| Widescreen field of view | On screens wider than 4:3 the game keeps the 4:3 width and crops the top and bottom, which looks zoomed in; this keeps the 4:3 height and opens up the sides instead, with the HUD's reticle and target markers following (`WidescreenFOV`) |
 | Smooth text | Redraws all game text (menus, briefings, chat, HUD readouts) from smoothed, high-resolution rebuilds of the game's own fonts, keeping the game's layout and colours (1.004 and 1.003; `TextHD`) |
 | Ambient occlusion, edge smoothing | The visual effects; applied to the 3D world only, never the HUD |
 | Ultrawide HUD | Pulls HUD elements anchored to the screen edges in to a 16:9-wide area in the middle (rewrites `hudLayout.prf`, keeping the original as `hudLayout.prf.sswrap-orig`) |
@@ -126,6 +127,7 @@ you rearrange the HUD in the game, that arrangement becomes the new original.
 | `AskOnLaunch` | 1 | Show the settings window at startup |
 | `UltrawideHud` | 0 | Keep the HUD within a centred 16:9 area (set by the settings window) |
 | `HudScale` | 1 | Enlarge the HUD meters 1.25x-2x at any game resolution (1.004 and 1.003; set by the settings window) |
+| `WidescreenFOV` | 1 | Wider view on wide screens instead of a cropped 4:3 one (set by the settings window) |
 | `TextHD` | 1 | Redraw game text from smoothed rebuilds of the game's fonts (1.004 and 1.003; set by the settings window) |
 | `TextTrace` | 0 | Diagnostics: log every distinct string the game draws |
 | `UiUpscale` | 1 | Enlarge HUD/menu/font bitmaps 2x or 4x with Scale2x, or with `sub_*.png` HD replacements |

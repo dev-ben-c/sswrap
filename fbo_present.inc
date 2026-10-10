@@ -377,7 +377,7 @@ static void apply_scene_fx(const char *where)
     if (!g_persp_seen) {
         /* CPU-projected: no GL projection to read, so derive it from the configured FOV and
          * the aspect ratio; distance = DepthScale / depth */
-        float p0 = 1.0f / (float)tan(cfg.cpu_fov * 3.14159265f / 360.0f);
+        float p0 = 1.0f / ((float)tan(cfg.cpu_fov * 3.14159265f / 360.0f) * g_fov_k);   /* widened view */
         g_proj[0] = p0; g_proj[1] = p0 * g_fbw / g_fbh; g_proj[2] = cfg.depth_scale; g_proj[3] = 0;
     }
     pass_begin();
