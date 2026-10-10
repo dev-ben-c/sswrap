@@ -240,6 +240,13 @@ handful `sswrap.c` intercepts.
 - On `SwapBuffers` the frame is drawn to the real window through the FXAA/sharpen shader,
   letterboxed, then swapped. All GL state is saved and restored around every pass.
 
+## Engine notes
+
+[docs/engine-notes.md](docs/engine-notes.md) describes what we learned about the engine while
+building sswrap (surfaces and the drawing table, fonts, the OpenGL texture cache, HUD controls,
+the camera and field of view, networking), with addresses for 1.004 and 1.003. Symbol files for
+Ghidra and the tools used are in `docs/` and [`tools/re`](tools/re).
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Starsiege is a trademark of its respective owners; this project
